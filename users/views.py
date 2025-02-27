@@ -7,6 +7,19 @@ from django.contrib.auth import get_user_model, authenticate
 from knox.models import AuthToken
 
 User = get_user_model()
+class LogoutViewset(viewsets.ViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def create(self, request):
+        """
+        Logs out the user by deleting their authentication token.
+        """
+        try:
+            # Delete the user's token to log them out
+            AuthToken.objects.filter(user=request.user).delete()
+            return Response({"detail": "Logged out successfully"}, status=200)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=400)
 
 class LoginViewset(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
