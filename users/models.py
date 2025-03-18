@@ -54,7 +54,7 @@ class CustomUser(AbstractUser):
         AssociationAccount,
         on_delete=models.CASCADE,
         related_name='users',
-        null=True, blank=False  # Now association is mandatory
+        null=False, blank=False
     )
 
     objects = CustomUserManager()
