@@ -11,11 +11,11 @@ router.register('users', UserViewset, basename='users')
 router.register('logout', LogoutViewset, basename='logout')
 router.register('register-association', AssociationRegisterViewset, basename='register-association')
 router.register('associations', AssociationListViewset, basename='associations')
+router.register('profile', UserProfileViewSet, basename='user-profile')
 
 urlpatterns = [
     path('', include(router.urls)),
 ]
-
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

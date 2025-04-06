@@ -7,30 +7,27 @@ from django.utils.html import strip_tags
 from django_rest_passwordreset.signals import reset_password_token_created
 
 
-
 class CustomUserManager(BaseUserManager):
-    def create_user(self, email, password=None, association=None, **extra_fields):
+    def create_user(self, email, password=None, association=None, full_name=None, **extra_fields):
         if not email:
             raise ValueError('Email is a required field')
 
-        if not association:
-            raise ValueError('Association is a required field')  # Ensuring association is provided
+        # Only require association for regular users, not superusers
+        if not association and not extra_fields.get('is_superuser', False):
+            raise ValueError('Association is a required field for regular users')
 
         email = self.normalize_email(email)
         extra_fields.setdefault('is_active', True)
 
-        user = self.model(email=email, association=association, **extra_fields)
+        user = self.model(email=email, association=association, full_name=full_name, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
 
-    def create_superuser(self, email, password=None, association=None, **extra_fields):
-        if not association:
-            raise ValueError('Association is a required field')  # Ensuring association is provided
-
+    def create_superuser(self, email, password=None, association=None, full_name=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
-        return self.create_user(email, password, association, **extra_fields)
+        return self.create_user(email, password, association, full_name, **extra_fields)
 
 
 # Association Account Model (Main User)
@@ -50,19 +47,22 @@ class AssociationAccount(models.Model):
 class CustomUser(AbstractUser):
     email = models.EmailField(max_length=200, unique=True)
     username = models.CharField(max_length=200, null=True, blank=True)
+    full_name = models.CharField(max_length=255, blank=True, null=True)  # Added full name field
     association = models.ForeignKey(
         AssociationAccount,
         on_delete=models.CASCADE,
         related_name='users',
-        null=False, blank=False
+        null=True, blank=True  # Changed to allow null for superusers
     )
 
     objects = CustomUserManager()
 
     USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['association']  # Ensuring association is required
+    REQUIRED_FIELDS = []  # Removed association from required fields
 
     def __str__(self):
+        if self.full_name:
+            return f"{self.full_name} ({self.email})"
         return self.email
 
 
@@ -78,7 +78,8 @@ def password_reset_token_created(reset_password_token, *args, **kwargs):
 
     context = {
         'full_link': full_link,
-        'email_adress': reset_password_token.user.email
+        'email_adress': reset_password_token.user.email,
+        'full_name': reset_password_token.user.full_name or reset_password_token.user.email
     }
 
     html_message = render_to_string("backend/email.html", context=context)

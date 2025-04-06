@@ -1,12 +1,36 @@
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, permissions
-from rest_framework.response import Response
 from django.contrib.auth import get_user_model, authenticate
 from knox.models import AuthToken
 from .serializers import *
 from .models import AssociationAccount
+from rest_framework import viewsets
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from .serializers import UserProfileSerializer
 
-User = get_user_model()
+
+class UserProfileViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        """
+        Get the current user's profile information
+        """
+        user = request.user
+        serializer = UserProfileSerializer(user)
+        return Response(serializer.data)
+
+    def update(self, request, pk=None):
+        """
+        Update user profile information
+        """
+        user = request.user
+        serializer = UserProfileSerializer(user, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
 
 
 # Logout View
@@ -76,7 +100,9 @@ class RegisterViewset(viewsets.ViewSet):
 
         serializer = self.serializer_class(data=data)
         if serializer.is_valid():
-            user = serializer.save(association=association)
+            # Include full_name in the saved user data if provided
+            full_name = data.get("full_name", "")
+            user = serializer.save(association=association, full_name=full_name)
             return Response(serializer.data, status=201)
 
         return Response(serializer.errors, status=400)
@@ -85,9 +111,10 @@ class RegisterViewset(viewsets.ViewSet):
 # Fetch Users (Admins see their own association users)
 class UserViewset(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
-    serializer_class = RegisterSerializer
+    serializer_class = UserProfileSerializer  # Changed to UserProfileSerializer to include full_name
 
     def list(self, request):
+        User = get_user_model()
         if request.user.is_superuser:
             queryset = User.objects.all()  # Superusers see all users
         else:
