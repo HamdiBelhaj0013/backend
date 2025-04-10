@@ -4,6 +4,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from .views import *
 
+# Main router with your existing endpoints
 router = DefaultRouter()
 router.register('register', RegisterViewset, basename='register')
 router.register('login', LoginViewset, basename='login')
@@ -13,8 +14,13 @@ router.register('register-association', AssociationRegisterViewset, basename='re
 router.register('associations', AssociationListViewset, basename='associations')
 router.register('profile', UserProfileViewSet, basename='user-profile')
 
+# Verification router
+verification_router = DefaultRouter()
+verification_router.register('association-verification', AssociationAccountViewSet, basename='association-verification')
+
 urlpatterns = [
     path('', include(router.urls)),
+    path('verification/', include(verification_router.urls)),
 ]
 
 if settings.DEBUG:

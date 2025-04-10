@@ -30,7 +30,6 @@ class CustomUserManager(BaseUserManager):
         return self.create_user(email, password, association, full_name, **extra_fields)
 
 
-# Association Account Model (Main User)
 class AssociationAccount(models.Model):
     name = models.CharField(max_length=255, unique=True)
     email = models.EmailField(unique=True)
@@ -38,6 +37,18 @@ class AssociationAccount(models.Model):
     cin_verso = models.FileField(upload_to='documents/cin/', blank=True, null=True)
     matricule_fiscal = models.CharField(max_length=100, unique=True)
     rne_document = models.FileField(upload_to='documents/rne/', blank=True, null=True)
+    is_verified = models.BooleanField(default=False)
+    verification_date = models.DateTimeField(null=True, blank=True)
+    verification_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending'),
+            ('verified', 'Verified'),
+            ('failed', 'Failed')
+        ],
+        default='pending'
+    )
+    verification_notes = models.TextField(blank=True, null=True)
 
     def __str__(self):
         return self.name

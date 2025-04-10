@@ -3,14 +3,31 @@ from rest_framework import serializers
 from .models import CustomUser, AssociationAccount
 
 
-class AssociationSerializer(serializers.ModelSerializer):
+class AssociationAccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = AssociationAccount
-        fields = ['id', 'name', 'email', 'matricule_fiscal']
+        fields = [
+            'id', 'name', 'email', 'cin_recto', 'cin_verso',
+            'matricule_fiscal', 'rne_document', 'is_verified',
+            'verification_date', 'verification_status', 'verification_notes'
+        ]
+        read_only_fields = [
+            'is_verified', 'verification_date', 'verification_status', 'verification_notes'
+        ]
+
+class AssociationVerificationSerializer(serializers.ModelSerializer):
+    """Serializer for verifying an association account"""
+    class Meta:
+        model = AssociationAccount
+        fields = [
+            'id', 'verification_status', 'verification_notes',
+            'is_verified', 'verification_date'
+        ]
+        read_only_fields = fields
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
-    association = AssociationSerializer(read_only=True)
+    association = AssociationAccountSerializer(read_only=True)
 
     class Meta:
         model = CustomUser
