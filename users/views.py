@@ -27,9 +27,16 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
         Custom permissions:
         - Admin users can access all endpoints
         - Regular users can only create and view their own account
+        - Allow anonymous access for retrieve (GET) to check verification status
         """
+        # Allow anonymous access for retrieve (GET) operation
+        if self.action == 'retrieve':
+            return [permissions.AllowAny()]
+
+        # Admin-only actions
         if self.action in ['list', 'verify', 'manual_verify']:
             return [IsAdminUser()]
+
         return [IsAuthenticated()]
 
     def perform_create(self, serializer):
@@ -40,99 +47,74 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
         if association.rne_document and association.matricule_fiscal:
             self._verify_association(association)
 
-    class AssociationAccountViewSet(viewsets.ModelViewSet):
+    def _verify_association(self, association):
         """
-        ViewSet for managing association accounts
+        Internal method to verify an association's documents
         """
-        queryset = AssociationAccount.objects.all()
-        serializer_class = AssociationAccountSerializer
+        from .document_extractor_utils import process_association_verification
+        return process_association_verification(association)
 
-        def get_permissions(self):
-            """
-            Custom permissions:
-            - Admin users can access all endpoints
-            - Regular users can only create and view their own account
-            """
-            if self.action in ['list', 'verify', 'manual_verify']:
-                return [IsAdminUser()]
-            return [IsAuthenticated()]
+    def perform_update(self, serializer):
+        """Override update to attempt automatic verification if relevant fields changed"""
+        # Get the original instance
+        instance = self.get_object()
 
-        def perform_create(self, serializer):
-            """Override create to attempt automatic verification"""
-            association = serializer.save()
+        # Save the updates
+        association = serializer.save()
 
-            # Check if we can perform automatic verification
-            if association.rne_document and association.matricule_fiscal:
-                self._verify_association(association)
+        # Check if relevant fields changed
+        rne_changed = instance.rne_document != association.rne_document
+        matricule_changed = instance.matricule_fiscal != association.matricule_fiscal
 
-        def _verify_association(self, association):
-            """
-            Internal method to verify an association's documents
-            """
-            from .document_extractor_utils import process_association_verification
-            return process_association_verification(association)
-
-        def perform_update(self, serializer):
-            """Override update to attempt automatic verification if relevant fields changed"""
-            # Get the original instance
-            instance = self.get_object()
-
-            # Save the updates
-            association = serializer.save()
-
-            # Check if relevant fields changed
-            rne_changed = instance.rne_document != association.rne_document
-            matricule_changed = instance.matricule_fiscal != association.matricule_fiscal
-
-            # If either field changed and both are present, verify again
-            if (rne_changed or matricule_changed) and association.rne_document and association.matricule_fiscal:
-                self._verify_association(association)
-
-        @action(detail=True, methods=['post'])
-        def verify(self, request, pk=None):
-            """
-            Endpoint to manually trigger verification for a specific association
-            """
-            association = self.get_object()
-
-            # Verify the association
+        # If either field changed and both are present, verify again
+        if (rne_changed or matricule_changed) and association.rne_document and association.matricule_fiscal:
             self._verify_association(association)
 
-            # Return the updated verification status
+    @action(detail=True, methods=['post'])
+    def verify(self, request, pk=None):
+        """
+        Endpoint to manually trigger verification for a specific association
+        """
+        association = self.get_object()
+
+        # Verify the association
+        self._verify_association(association)
+
+        # Return the updated verification status
+        serializer = AssociationVerificationSerializer(association)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def manual_verify(self, request, pk=None):
+        """
+        Endpoint for admins to manually set verification status
+        """
+        association = self.get_object()
+
+        # Update verification fields from request data
+        verification_status = request.data.get('verification_status')
+        verification_notes = request.data.get('verification_notes', '')
+
+        if verification_status in ['pending', 'verified', 'failed']:
+            association.verification_status = verification_status
+            association.verification_notes = verification_notes
+
+            # Update is_verified based on status
+            association.is_verified = (verification_status == 'verified')
+
+            # Set verification date if verified
+            if verification_status == 'verified':
+                association.verification_date = timezone.now()
+
+            association.save()
+
             serializer = AssociationVerificationSerializer(association)
             return Response(serializer.data)
-
-        @action(detail=True, methods=['post'])
-        def manual_verify(self, request, pk=None):
-            """
-            Endpoint for admins to manually set verification status
-            """
-            association = self.get_object()
-
-            # Update verification fields from request data
-            verification_status = request.data.get('verification_status')
-            verification_notes = request.data.get('verification_notes', '')
-
-            if verification_status in ['pending', 'verified', 'failed']:
-                association.verification_status = verification_status
-                association.verification_notes = verification_notes
-
-                # Update is_verified based on status
-                association.is_verified = (verification_status == 'verified')
-
-                # Set verification date if verified
-                if verification_status == 'verified':
-                    association.verification_date = timezone.now()
-
-                association.save()
-
-                serializer = AssociationVerificationSerializer(association)
-                return Response(serializer.data)
-            else:
-                return Response(
-                    {"error": "Invalid verification status"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        else:
+            return Response(
+                {"error": "Invalid verification status"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 class UserProfileViewSet(viewsets.ViewSet):
@@ -195,7 +177,6 @@ class LoginViewset(viewsets.ViewSet):
         return Response(serializer.errors, status=400)
 
 
-# Association Registration View
 # Association Registration View
 class AssociationRegisterViewset(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
