@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -15,8 +16,10 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
+# Load environment variables from .env file
+load_dotenv()
 
-# Application definition
+
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -31,7 +34,7 @@ INSTALLED_APPS = [
     'api',
     'knox', 
     'django_rest_passwordreset',
-
+    'chatbot',  # Add the chatbot app
 ]
 
 MIDDLEWARE = [
@@ -97,6 +100,14 @@ DATABASES = {
 MEDIA_URL = '/media/'  # The URL to access media files
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')  # The folder where media files will be stored
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10485760
+
+# Create temp directory for file processing
+TEMP_DIR = os.path.join(MEDIA_ROOT, 'temp')
+os.makedirs(TEMP_DIR, exist_ok=True)
+
+# Chatbot settings
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
 
