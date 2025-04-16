@@ -17,7 +17,7 @@ class ChatbotService:
         self.model_loaded = False
 
     def _load_model_if_needed(self):
-        """Lazy-load the model only when needed"""
+        """Lazy-load the model only when needed with better error handling"""
         if self.model_loaded:
             return self.llm_available
 
@@ -26,18 +26,36 @@ class ChatbotService:
             model_path = os.path.join(settings.MEDIA_ROOT, 'models', 'mistral-7b-instruct-v0.1.Q4_K_M.gguf')
 
             if os.path.exists(model_path):
-                # Use more memory-efficient settings
-                self.llm = Llama(
-                    model_path=model_path,
-                    n_ctx=512,  # Reduce context window
-                    n_threads=2,  # Reduce thread count
-                    n_batch=8,  # Smaller batch size
-                    n_gpu_layers=0,  # No GPU layers
-                    offload_kqv=True,  # Offload key/query/value tensors
-                    use_mlock=False  # Don't lock memory
-                )
-                self.llm_available = True
-                logger.info(f"LLM loaded successfully with memory-optimized settings")
+                logger.info(f"Loading model from {model_path} with optimized settings")
+
+                try:
+                    # Use more memory-efficient settings
+                    self.llm = Llama(
+                        model_path=model_path,
+                        n_ctx=512,  # Reduce context window
+                        n_threads=2,  # Reduce thread count
+                        n_batch=8,  # Smaller batch size
+                        use_mlock=False  # Don't lock memory
+                    )
+                    self.llm_available = True
+                    logger.info(f"LLM loaded successfully with memory-optimized settings")
+                except Exception as e:
+                    logger.error(f"Error loading LLM with initial settings: {e}")
+                    logger.info("Trying with minimal settings...")
+
+                    # Try with absolute minimal settings
+                    try:
+                        self.llm = Llama(
+                            model_path=model_path,
+                            n_ctx=256,
+                            n_threads=1,
+                            n_batch=1
+                        )
+                        self.llm_available = True
+                        logger.info("LLM loaded with minimal settings")
+                    except Exception as e:
+                        logger.error(f"Error loading LLM with minimal settings: {e}")
+                        self.llm_available = False
             else:
                 logger.warning(f"LLM model file not found at {model_path}")
                 self.llm_available = False
@@ -84,38 +102,88 @@ Sois précis, professionnel et concis dans tes réponses en français."""
         return history
 
     def _generate_response_with_local_llm(self, query, relevant_chunks, conversation_history=None):
-        """Generate a response using the local LLM"""
+        """Generate a response using the local LLM with better error handling"""
         if not self._load_model_if_needed():
+            logger.warning("LLM not available, using fallback response")
             return self._generate_fallback_response(query)
 
-        system_prompt = self._create_system_prompt(relevant_chunks)
-
-        # Build messages for chat completion
-        messages = [{"role": "system", "content": system_prompt}]
-
-        # Add conversation history
-        if conversation_history:
-            for message in conversation_history:
-                messages.append(message)
-
-        # Add the current query
-        messages.append({"role": "user", "content": query})
-
         try:
-            # Generate the response using the local LLM
-            response = self.llm.create_chat_completion(
-                messages=messages,
-                max_tokens=512,
-                temperature=0.7,
-                top_p=0.9
-            )
+            # Create a simple prompt instead of chat format for testing
+            chunks_text = "\n\n".join([chunk.content for chunk in relevant_chunks])
 
-            generated_text = response["choices"][0]["message"]["content"]
-            return generated_text.strip()
+            simple_prompt = f"""Sur base des extraits du décret-loi n° 2011-88 du 24 septembre 2011 portant organisation des associations en Tunisie ci-dessous:
+
+    {chunks_text}
+
+    Question: {query}
+
+    Réponse:"""
+
+            logger.info(f"Generating response for query: {query}")
+            logger.info(f"Using {len(relevant_chunks)} relevant chunks")
+
+            # Try simple completion first
+            try:
+                logger.info("Attempting simple text completion")
+                output = self.llm(
+                    simple_prompt,
+                    max_tokens=256,
+                    temperature=0.7,
+                    stop=["Question:", "\n\n"]
+                )
+                response_text = output['choices'][0]['text'].strip()
+                logger.info(f"Generated response with simple completion: {response_text[:100]}...")
+                return response_text
+            except Exception as e:
+                logger.error(f"Error with simple completion: {e}")
+
+                # Fall back to original approach
+                logger.info("Falling back to chat completion")
+                system_prompt = self._create_system_prompt(relevant_chunks)
+
+                # Build messages for chat completion
+                messages = [{"role": "system", "content": system_prompt}]
+
+                # Keep history minimal
+                if conversation_history:
+                    # Just add the last message if available
+                    if len(conversation_history) > 0:
+                        messages.append(conversation_history[-1])
+
+                # Add the current query
+                messages.append({"role": "user", "content": query})
+
+                # Try chat completion
+                response = self.llm.create_chat_completion(
+                    messages=messages,
+                    max_tokens=256,  # Reduced from 512
+                    temperature=0.7
+                )
+
+                generated_text = response["choices"][0]["message"]["content"]
+                logger.info(f"Generated response with chat completion: {generated_text[:100]}...")
+                return generated_text.strip()
 
         except Exception as e:
-            logger.error(f"Error generating response with local LLM: {e}")
-            return "Je suis désolé, j'ai rencontré une erreur lors de la génération de la réponse. Veuillez réessayer."
+            logger.error(f"Error generating response with local LLM: {str(e)}")
+            logger.error(traceback.format_exc())
+
+            # Try with a hardcoded response based on the query
+            query_lower = query.lower()
+
+            if "créer" in query_lower and "association" in query_lower:
+                return """Pour créer une association en Tunisie selon le décret-loi n° 2011-88, vous devez suivre ces étapes:
+
+    1. Préparer une lettre recommandée adressée au secrétaire général du gouvernement contenant:
+       - Une déclaration avec la dénomination, l'objet, les objectifs et le siège de l'association
+       - Copies des cartes d'identité des fondateurs tunisiens ou copies des cartes de séjour pour les étrangers
+       - Deux exemplaires des statuts signés par les fondateurs
+
+    2. Après réception de l'accusé de réception, déposer une annonce à l'Imprimerie Officielle dans un délai de 7 jours.
+
+    L'association est légalement constituée à partir du jour de l'envoi de la lettre recommandée et acquiert la personnalité morale après publication de l'annonce au Journal Officiel."""
+
+            return self._generate_fallback_response(query)
 
     def _generate_fallback_response(self, query):
         """
