@@ -34,7 +34,9 @@ INSTALLED_APPS = [
     'api',
     'knox', 
     'django_rest_passwordreset',
-    'chatbot',  # Add the chatbot app
+    'chatbot',  # Chatbot app
+    'finances',  # Financial management app
+    'django_filters',  # For filtering in DRF
 ]
 
 MIDDLEWARE = [
@@ -80,7 +82,8 @@ TEMPLATES = [
 WSGI_APPLICATION = 'auth.wsgi.application'
 
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': ('knox.auth.TokenAuthentication',)
+    'DEFAULT_AUTHENTICATION_CLASSES': ('knox.auth.TokenAuthentication',),
+    'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend']
 }
 
 # Database
@@ -104,6 +107,11 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 10485760
 # Create temp directory for file processing
 TEMP_DIR = os.path.join(MEDIA_ROOT, 'temp')
 os.makedirs(TEMP_DIR, exist_ok=True)
+
+# Create finance directories for upload organization
+FINANCE_UPLOAD_DIR = os.path.join(MEDIA_ROOT, 'finance')
+os.makedirs(os.path.join(FINANCE_UPLOAD_DIR, 'transactions'), exist_ok=True)
+os.makedirs(os.path.join(FINANCE_UPLOAD_DIR, 'reports'), exist_ok=True)
 
 # Chatbot settings
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')

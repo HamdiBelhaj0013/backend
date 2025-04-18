@@ -3,10 +3,11 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from .utils import find_relevant_chunks
+from .conversation_handlers import conversation_manager
 
 
 class DirectChatView(APIView):
-    """Simple view for direct testing without conversations"""
+    """View for direct testing without conversations"""
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -15,10 +16,22 @@ class DirectChatView(APIView):
         if not query:
             return Response({"error": "No query provided. Please include a 'query' field."}, status=400)
 
-        # Find relevant chunks
+        # Check if it's a purely conversational query first
+        conversation_response, is_conversational = conversation_manager.handle_conversation(query)
+
+        if is_conversational:
+            # For conversational queries, we don't need to search for document chunks
+            return Response({
+                "query": query,
+                "response": conversation_response,
+                "relevant_chunks": [],
+                "is_conversational": True
+            })
+
+        # For non-conversational queries, find relevant chunks
         relevant_chunks = find_relevant_chunks(query)
 
-        # Use rule-based responses instead of LLM for reliability
+        # Use rule-based responses with relevant chunks
         response_text = self._generate_rule_based_response(query, relevant_chunks)
 
         # Return response
@@ -28,14 +41,15 @@ class DirectChatView(APIView):
             "relevant_chunks": [
                 {"content": chunk.content[:100] + "..."}
                 for chunk in relevant_chunks[:3]
-            ]
+            ],
+            "is_conversational": False
         })
 
     def _generate_rule_based_response(self, query, relevant_chunks):
-        """Generate a rule-based response"""
+        """Generate a rule-based response with relevant context"""
         query_lower = query.lower()
 
-        # Create responses for common questions
+        # Create responses for common questions with context awareness
         if any(word in query_lower for word in ["créer", "constituer", "fonder"]) and "association" in query_lower:
             return """Pour créer une association en Tunisie selon le décret-loi n° 2011-88, vous devez:
 
@@ -98,8 +112,19 @@ Les fondateurs et dirigeants ne peuvent pas être en charge de responsabilités 
 Les membres et salariés doivent éviter les conflits d'intérêts (article 18)."""
 
         else:
-            # For other questions, return a generic response
-            return """D'après le décret-loi n° 2011-88 sur les associations en Tunisie, je n'ai pas de réponse spécifique préparée pour cette question.
+            # Try to extract information from the relevant chunks
+            if relevant_chunks:
+                # Combine information from chunks for a more informed response
+                combined_info = "\n\n".join([chunk.content for chunk in relevant_chunks[:2]])
+
+                return f"""Selon le décret-loi n° 2011-88 sur les associations en Tunisie, voici ce que je peux vous dire sur votre question:
+
+{combined_info}
+
+Est-ce que cela répond à votre question? Sinon, pourriez-vous la reformuler pour que je puisse mieux vous aider?"""
+            else:
+                # For other questions without relevant chunks, return a generic response
+                return """D'après le décret-loi n° 2011-88 sur les associations en Tunisie, je n'ai pas de réponse spécifique préparée pour cette question.
 
 Les principales catégories d'informations disponibles concernent:
 - La création d'associations
@@ -108,13 +133,14 @@ Les principales catégories d'informations disponibles concernent:
 - La dissolution d'associations
 - Les conditions d'adhésion et les membres
 
-Pourriez-vous reformuler votre question dans l'une de ces catégories?"""
-def unload_model(self):
-    """Unload the model to free memory"""
-    if self.llm is not None:
-        del self.llm
-        import gc
-        gc.collect()
-        self.llm = None
-        self.model_loaded = False
-        logger.info("LLM unloaded from memory")
+Pourriez-vous reformuler votre question dans l'une de ces catégories? Je serai ravi de vous aider."""
+
+    def unload_model(self):
+        """Unload the model to free memory"""
+        if hasattr(self, 'llm') and self.llm is not None:
+            del self.llm
+            import gc
+            gc.collect()
+            self.llm = None
+            self.model_loaded = False
+            logger.info("LLM unloaded from memory")

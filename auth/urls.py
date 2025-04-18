@@ -17,6 +17,10 @@ urlpatterns = [
 
     # Password reset
     path('auth/password_reset/', include('django_rest_passwordreset.urls', namespace='password_reset')),
+
     # Chatbot URLs
     path('chatbot/', include('chatbot.urls')),
+
+    # Financial management URLs
+    path('finances/', include('finances.urls')),
 ]
