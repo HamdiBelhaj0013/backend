@@ -17,56 +17,6 @@ class DonorSerializer(serializers.ModelSerializer):
         ]
 
 
-class TransactionSerializer(serializers.ModelSerializer):
-    project_details = ProjectSerializer(source='project', read_only=True)
-    donor_details = DonorSerializer(source='donor', read_only=True)
-    created_by_details = UserProfileSerializer(source='created_by', read_only=True)
-    verified_by_details = UserProfileSerializer(source='verified_by', read_only=True)
-
-    class Meta:
-        model = Transaction
-        fields = [
-            'id', 'transaction_type', 'category', 'amount', 'description',
-            'date', 'document', 'project', 'project_details', 'donor', 'donor_details',
-            'reference_number', 'status', 'verified_by', 'verified_by_details',
-            'verification_date', 'verification_notes', 'created_by', 'created_by_details',
-            'created_at', 'updated_at'
-        ]
-        read_only_fields = ['verified_by', 'verification_date']
-
-    def create(self, validated_data):
-        # Add the current user as the creator
-        validated_data['created_by'] = self.context['request'].user
-        return super().create(validated_data)
-
-
-class TransactionVerificationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Transaction
-        fields = ['status', 'verification_notes']
-
-    def update(self, instance, validated_data):
-        instance.status = validated_data.get('status', instance.status)
-        instance.verification_notes = validated_data.get('verification_notes', instance.verification_notes)
-
-        # If the transaction is being verified, set verified_by and verification_date
-        if instance.status == 'verified':
-            instance.verified_by = self.context['request'].user
-            instance.verification_date = timezone.now()
-
-            # If the transaction is linked to a project, update the budget usage
-            if instance.project and instance.transaction_type == 'expense':
-                try:
-                    budget = BudgetAllocation.objects.get(project=instance.project)
-                    budget.used_amount += instance.amount
-                    budget.save()
-                except BudgetAllocation.DoesNotExist:
-                    pass
-
-        instance.save()
-        return instance
-
-
 class BudgetAllocationSerializer(serializers.ModelSerializer):
     project_details = ProjectSerializer(source='project', read_only=True)
     created_by_details = UserProfileSerializer(source='created_by', read_only=True)
@@ -87,6 +37,63 @@ class BudgetAllocationSerializer(serializers.ModelSerializer):
         # Add the current user as the creator
         validated_data['created_by'] = self.context['request'].user
         return super().create(validated_data)
+
+
+class TransactionSerializer(serializers.ModelSerializer):
+    project_details = ProjectSerializer(source='project', read_only=True)
+    donor_details = DonorSerializer(source='donor', read_only=True)
+    created_by_details = UserProfileSerializer(source='created_by', read_only=True)
+    verified_by_details = UserProfileSerializer(source='verified_by', read_only=True)
+    budget_allocation_details = BudgetAllocationSerializer(source='budget_allocation', read_only=True)
+
+    class Meta:
+        model = Transaction
+        fields = [
+            'id', 'transaction_type', 'category', 'amount', 'description',
+            'date', 'document', 'project', 'project_details', 'donor', 'donor_details',
+            'budget_allocation', 'budget_allocation_details',
+            'reference_number', 'status', 'verified_by', 'verified_by_details',
+            'verification_date', 'verification_notes', 'created_by', 'created_by_details',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['verified_by', 'verification_date']
+
+    def create(self, validated_data):
+        # Add the current user as the creator
+        validated_data['created_by'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+class TransactionVerificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Transaction
+        fields = ['status', 'verification_notes', 'budget_allocation']
+
+    def update(self, instance, validated_data):
+        instance.status = validated_data.get('status', instance.status)
+        instance.verification_notes = validated_data.get('verification_notes', instance.verification_notes)
+
+        # Allow updating budget_allocation during verification if it's not already set
+        if 'budget_allocation' in validated_data and not instance.budget_allocation:
+            instance.budget_allocation = validated_data.get('budget_allocation')
+
+        # If the transaction is being verified, set verified_by and verification_date
+        if instance.status == 'verified':
+            instance.verified_by = self.context['request'].user
+            instance.verification_date = timezone.now()
+
+            # If the transaction is linked to a budget allocation and is an expense, update the budget usage
+            if instance.budget_allocation and instance.transaction_type == 'expense':
+                try:
+                    budget = instance.budget_allocation
+                    budget.used_amount += instance.amount
+                    budget.save()
+                except Exception as e:
+                    # Log the error but don't prevent verification
+                    print(f"Error updating budget: {e}")
+
+        instance.save()
+        return instance
 
 
 class FinancialReportSerializer(serializers.ModelSerializer):

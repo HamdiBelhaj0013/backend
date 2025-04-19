@@ -110,8 +110,8 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 # Create finance directories for upload organization
 FINANCE_UPLOAD_DIR = os.path.join(MEDIA_ROOT, 'finance')
-os.makedirs(os.path.join(FINANCE_UPLOAD_DIR, 'transactions'), exist_ok=True)
 os.makedirs(os.path.join(FINANCE_UPLOAD_DIR, 'reports'), exist_ok=True)
+os.makedirs(os.path.join(FINANCE_UPLOAD_DIR, 'transactions'), exist_ok=True)
 
 # Chatbot settings
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
