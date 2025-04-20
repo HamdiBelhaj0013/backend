@@ -197,7 +197,7 @@ def get_financial_statistics(start_date=None, end_date=None):
         'total_expenses': total_expenses,
         'net_balance': net_balance,
         'income_by_category': income_by_category,
-        'expense_by_category': expense_by_category,
+        'expenses_by_category': expense_by_category,
         'start_date': start_date,
         'end_date': end_date
     }
