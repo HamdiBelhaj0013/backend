@@ -17,13 +17,12 @@ def generate_pdf_report(report_instance):
     To use this, uncomment the code below and install reportlab with:
     pip install reportlab
     """
-    pass
-    # Uncomment when ready to implement PDF reports
-    """
     from reportlab.lib.pagesizes import letter
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
+    from django.db.models import Sum
+    import io
 
     # Get transactions for the reporting period
     transactions = Transaction.objects.filter(
@@ -47,7 +46,7 @@ def generate_pdf_report(report_instance):
     elements.append(Paragraph(report_instance.title, title_style))
     elements.append(Spacer(1, 12))
     elements.append(Paragraph(
-        f"Period: {report_instance.start_date} to {report_instance.end_date}", 
+        f"Period: {report_instance.start_date} to {report_instance.end_date}",
         normal_style
     ))
     elements.append(Spacer(1, 12))
@@ -138,7 +137,6 @@ def generate_pdf_report(report_instance):
     )
 
     return report_instance
-    """
 
 
 def get_financial_statistics(start_date=None, end_date=None):

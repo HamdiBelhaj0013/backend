@@ -4,17 +4,31 @@ from api.serializers import ProjectSerializer
 from users.serializers import UserProfileSerializer
 from django.utils import timezone
 
+# Add this to your existing serializers.py file
+from rest_framework import serializers
+from .models import Donor
+
+# Update your DonorSerializer.py file with this code
+from rest_framework import serializers
+from .models import Donor
+
 
 class DonorSerializer(serializers.ModelSerializer):
-    total_donations = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    # Using SerializerMethodField for read-only properties
+    total_donations = serializers.SerializerMethodField()
 
     class Meta:
         model = Donor
         fields = [
-            'id', 'name', 'email', 'phone', 'address', 'tax_id',
-            'notes', 'is_anonymous', 'total_donations',
-            'created_at', 'updated_at'
+            'id', 'name', 'email', 'phone', 'address',
+            'tax_id', 'notes', 'is_anonymous',
+            'created_at', 'updated_at', 'total_donations'
         ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'total_donations']
+
+    def get_total_donations(self, obj):
+        # This calls the total_donations property on the model
+        return obj.total_donations
 
 
 class BudgetAllocationSerializer(serializers.ModelSerializer):
