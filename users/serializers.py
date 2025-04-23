@@ -1,6 +1,10 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
-from .models import CustomUser, AssociationAccount
+from .models import CustomUser, AssociationAccount, Role
+from .permissions import ROLE_PERMISSIONS
+
+
+User = get_user_model()
 
 
 class AssociationAccountSerializer(serializers.ModelSerializer):
@@ -15,6 +19,7 @@ class AssociationAccountSerializer(serializers.ModelSerializer):
             'is_verified', 'verification_date', 'verification_status', 'verification_notes'
         ]
 
+
 class AssociationVerificationSerializer(serializers.ModelSerializer):
     """Serializer for verifying an association account"""
     class Meta:
@@ -26,8 +31,22 @@ class AssociationVerificationSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class RoleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Role
+        fields = ['id', 'name', 'description']
+
+
 class UserProfileSerializer(serializers.ModelSerializer):
     association = AssociationAccountSerializer(read_only=True)
+    role = RoleSerializer(read_only=True)
+    role_id = serializers.PrimaryKeyRelatedField(
+        queryset=Role.objects.all(),
+        source='role',
+        write_only=True,
+        required=False
+    )
+    permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomUser
@@ -37,11 +56,18 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'full_name',
             'is_staff',
             'is_superuser',
-            'association'
+            'association',
+            'role',
+            'role_id',
+            'permissions'
         ]
 
+    def get_permissions(self, obj):
+        """Return all permissions for this user's role"""
+        if not obj.role:
+            return {}
 
-User = get_user_model()
+        return ROLE_PERMISSIONS.get(obj.role.name, {})
 
 
 # Login Serializer

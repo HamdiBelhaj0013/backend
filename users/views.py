@@ -224,19 +224,60 @@ class RegisterViewset(viewsets.ViewSet):
 
 
 # Fetch Users (Admins see their own association users)
+from .models import Role
+from .permissions import MembersPermission, has_permission
+from rest_framework.decorators import permission_classes
+
+
+# Add Role ViewSet
+class RoleViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for listing available roles"""
+    queryset = Role.objects.all()
+    serializer_class = RoleSerializer
+    permission_classes = [permissions.AllowAny]
+
+
+# Update existing ViewSets with permission checks
+
 class UserViewset(viewsets.ViewSet):
-    permission_classes = [permissions.IsAuthenticated]
-    serializer_class = UserProfileSerializer  # Changed to UserProfileSerializer to include full_name
+    permission_classes = [permissions.IsAuthenticated, MembersPermission]
+    serializer_class = UserProfileSerializer
 
     def list(self, request):
         User = get_user_model()
         if request.user.is_superuser:
-            queryset = User.objects.all()  # Superusers see all users
+            queryset = User.objects.all()
         else:
-            queryset = User.objects.filter(
-                association=request.user.association)  # Regular users see only their association's users
+            queryset = User.objects.filter(association=request.user.association)
+
+        # Filter by role if specified
+        role = request.query_params.get('role')
+        if role:
+            queryset = queryset.filter(role__name=role)
 
         serializer = self.serializer_class(queryset, many=True)
+        return Response(serializer.data)
+
+    # Add ability to update a user's role (for presidents)
+    @action(detail=True, methods=['post'])
+    def assign_role(self, request, pk=None):
+        # Check if user has permission to manage roles
+        if not has_permission(request.user, 'members', 'edit'):
+            return Response({"error": "You don't have permission to assign roles"}, status=403)
+
+        user = get_object_or_404(get_user_model(), pk=pk)
+        role_id = request.data.get('role_id')
+
+        if not role_id:
+            return Response({"error": "Role ID is required"}, status=400)
+
+        role = get_object_or_404(Role, pk=role_id)
+
+        # Update the user's role
+        user.role = role
+        user.save()
+
+        serializer = self.serializer_class(user)
         return Response(serializer.data)
 
 

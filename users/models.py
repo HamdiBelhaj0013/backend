@@ -54,16 +54,40 @@ class AssociationAccount(models.Model):
         return self.name
 
 
+class Role(models.Model):
+    """Role model for defining user roles within an association"""
+    ROLE_CHOICES = (
+        ('president', 'President'),
+        ('treasurer', 'Treasurer'),
+        ('secretary', 'General Secretary'),
+        ('member', 'Regular Member'),
+    )
+
+    name = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    description = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return self.get_name_display()
+
+
 # Custom User Model
 class CustomUser(AbstractUser):
     email = models.EmailField(max_length=200, unique=True)
     username = models.CharField(max_length=200, null=True, blank=True)
-    full_name = models.CharField(max_length=255, blank=True, null=True)  # Added full name field
+    full_name = models.CharField(max_length=255, blank=True, null=True)
     association = models.ForeignKey(
         AssociationAccount,
         on_delete=models.CASCADE,
         related_name='users',
-        null=True, blank=True  # Changed to allow null for superusers
+        null=True, blank=True
+    )
+    # Add role to the user
+    role = models.ForeignKey(
+        Role,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='users'
     )
 
     objects = CustomUserManager()
