@@ -33,6 +33,22 @@ class CustomUserManager(BaseUserManager):
 class AssociationAccount(models.Model):
     name = models.CharField(max_length=255, unique=True)
     email = models.EmailField(unique=True)
+
+    # President information
+    president_email = models.EmailField(blank=True, null=True, help_text="Email of the association's president")
+    president_name = models.CharField(max_length=255, blank=True, null=True,
+                                      help_text="Full name of the association's president")
+
+    # Treasurer information
+    treasurer_email = models.EmailField(blank=True, null=True, help_text="Email of the association's treasurer")
+    treasurer_name = models.CharField(max_length=255, blank=True, null=True,
+                                      help_text="Full name of the association's treasurer")
+
+    # Secretary information
+    secretary_email = models.EmailField(blank=True, null=True, help_text="Email of the association's general secretary")
+    secretary_name = models.CharField(max_length=255, blank=True, null=True,
+                                      help_text="Full name of the association's general secretary")
+
     cin_recto = models.FileField(upload_to='documents/cin/', blank=True, null=True)
     cin_verso = models.FileField(upload_to='documents/cin/', blank=True, null=True)
     matricule_fiscal = models.CharField(max_length=100, unique=True)

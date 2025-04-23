@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django.utils import timezone
 
-from .models import AssociationAccount
+from .models import AssociationAccount, Role, CustomUser
 from .serializers import AssociationAccountSerializer, AssociationVerificationSerializer
 from .document_extractor_utils import verify_association_document
 
@@ -45,7 +45,11 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
 
         # Check if we can perform automatic verification
         if association.rne_document and association.matricule_fiscal:
-            self._verify_association(association)
+            verified_association = self._verify_association(association)
+
+            # If verification was successful, create user accounts
+            if verified_association.is_verified:
+                self._create_role_based_users(verified_association)
 
     def _verify_association(self, association):
         """
@@ -54,10 +58,123 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
         from .document_extractor_utils import process_association_verification
         return process_association_verification(association)
 
+    def _create_role_based_users(self, association):
+        """
+        Create user accounts for president, treasurer, and secretary
+        with appropriate roles
+        """
+        User = get_user_model()
+
+        # Get the Role objects (creating them if they don't exist)
+        president_role, _ = Role.objects.get_or_create(name='president')
+        treasurer_role, _ = Role.objects.get_or_create(name='treasurer')
+        secretary_role, _ = Role.objects.get_or_create(name='secretary')
+
+        # Create temporary random passwords - these will be reset
+        # by the users during their first login
+        import secrets
+        temp_password = secrets.token_urlsafe(12)
+
+        # Create users with appropriate roles if emails provided
+        if association.president_email:
+            president_user, created = User.objects.get_or_create(
+                email=association.president_email,
+                defaults={
+                    'password': temp_password,
+                    'association': association,
+                    'full_name': f"President of {association.name}",
+                    'role': president_role
+                }
+            )
+            # Only send email if this is a new user
+            if created:
+                # Hash password properly for new user
+                president_user.set_password(temp_password)
+                president_user.save()
+                # Send password reset email to set password
+                self._send_password_setup_email(president_user)
+
+        if association.treasurer_email:
+            treasurer_user, created = User.objects.get_or_create(
+                email=association.treasurer_email,
+                defaults={
+                    'password': temp_password,
+                    'association': association,
+                    'full_name': f"Treasurer of {association.name}",
+                    'role': treasurer_role
+                }
+            )
+            if created:
+                treasurer_user.set_password(temp_password)
+                treasurer_user.save()
+                # Send password reset email to set password
+                self._send_password_setup_email(treasurer_user)
+
+        if association.secretary_email:
+            secretary_user, created = User.objects.get_or_create(
+                email=association.secretary_email,
+                defaults={
+                    'password': temp_password,
+                    'association': association,
+                    'full_name': f"Secretary of {association.name}",
+                    'role': secretary_role
+                }
+            )
+            if created:
+                secretary_user.set_password(temp_password)
+                secretary_user.save()
+                # Send password reset email to set password
+                self._send_password_setup_email(secretary_user)
+
+    def _send_password_setup_email(self, user):
+        """
+        Send password reset email to newly created user
+        """
+        from django_rest_passwordreset.models import ResetPasswordToken
+        from django.template.loader import render_to_string
+        from django.core.mail import EmailMultiAlternatives
+        from django.utils.html import strip_tags
+
+        # Create password reset token
+        token = ResetPasswordToken.objects.create(
+            user=user,
+            user_agent="API",
+            ip_address="127.0.0.1"
+        )
+
+        # Generate reset link
+        sitelink = "http://localhost:5173/"
+        token_key = "{}".format(token.key)
+        full_link = str(sitelink) + str("password-reset/") + str(token_key)
+
+        print(token_key)
+        print(full_link)
+
+        context = {
+            'full_link': full_link,
+            'email_adress': user.email,
+            'full_name': user.full_name or user.email
+        }
+
+        html_message = render_to_string("backend/email.html", context=context)
+        plain_message = strip_tags(html_message)
+
+        msg = EmailMultiAlternatives(
+            subject="Request for resetting password for {title}".format(title=user.email),
+            body=plain_message,
+            from_email="sender@example.com",
+            to=[user.email]
+        )
+
+        msg.attach_alternative(html_message, "text/html")
+        msg.send()
+        print("Password reset email sent")
+
     def perform_update(self, serializer):
         """Override update to attempt automatic verification if relevant fields changed"""
         # Get the original instance
         instance = self.get_object()
+        was_verified_before = instance.is_verified
 
         # Save the updates
         association = serializer.save()
@@ -68,7 +185,11 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
 
         # If either field changed and both are present, verify again
         if (rne_changed or matricule_changed) and association.rne_document and association.matricule_fiscal:
-            self._verify_association(association)
+            verified_association = self._verify_association(association)
+
+            # If association just became verified, create user accounts
+            if verified_association.is_verified and not was_verified_before:
+                self._create_role_based_users(verified_association)
 
     @action(detail=True, methods=['post'])
     def verify(self, request, pk=None):
@@ -76,12 +197,17 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
         Endpoint to manually trigger verification for a specific association
         """
         association = self.get_object()
+        was_verified_before = association.is_verified
 
         # Verify the association
-        self._verify_association(association)
+        verified_association = self._verify_association(association)
+
+        # If association just became verified, create user accounts
+        if verified_association.is_verified and not was_verified_before:
+            self._create_role_based_users(verified_association)
 
         # Return the updated verification status
-        serializer = AssociationVerificationSerializer(association)
+        serializer = AssociationVerificationSerializer(verified_association)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
@@ -90,6 +216,7 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
         Endpoint for admins to manually set verification status
         """
         association = self.get_object()
+        was_verified_before = association.is_verified
 
         # Update verification fields from request data
         verification_status = request.data.get('verification_status')
@@ -108,6 +235,10 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
 
             association.save()
 
+            # If association just became verified, create user accounts
+            if association.is_verified and not was_verified_before:
+                self._create_role_based_users(association)
+
             serializer = AssociationVerificationSerializer(association)
             return Response(serializer.data)
         else:
@@ -115,7 +246,6 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 {"error": "Invalid verification status"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
 
 class UserProfileViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
@@ -178,6 +308,7 @@ class LoginViewset(viewsets.ViewSet):
 
 
 # Association Registration View
+# Association Registration View
 class AssociationRegisterViewset(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
     serializer_class = AssociationRegisterSerializer
@@ -186,19 +317,185 @@ class AssociationRegisterViewset(viewsets.ViewSet):
         serializer = self.serializer_class(data=request.data)
         if serializer.is_valid():
             association = serializer.save()
+            print(f"Association created: {association.name} (ID: {association.id})")
 
             # Perform verification if the required fields are present
             if association.rne_document and association.matricule_fiscal:
+                print(f"Starting verification for association: {association.name}")
                 from .document_extractor_utils import process_association_verification
                 association = process_association_verification(association)
+                print(
+                    f"Verification completed. Status: {association.verification_status}, Is verified: {association.is_verified}")
+
+                # Only create user accounts if verification was successful
+                if association.is_verified:
+                    print(f"Association verified. Creating user accounts for: {association.name}")
+                    self._create_role_based_users(association)
+                else:
+                    print(f"Association not verified. User accounts not created.")
 
             # Return the updated serializer data
             updated_serializer = self.serializer_class(association)
             return Response(updated_serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
+    def _create_role_based_users(self, association):
+        """
+        Create user accounts for president, treasurer, and secretary
+        with appropriate roles using their full names
+        """
+        User = get_user_model()
+        print(f"Starting user creation for association: {association.name}")
 
-# User Registration (Must belong to an Association)
+        # Get the Role objects (creating them if they don't exist)
+        president_role, _ = Role.objects.get_or_create(name='president')
+        treasurer_role, _ = Role.objects.get_or_create(name='treasurer')
+        secretary_role, _ = Role.objects.get_or_create(name='secretary')
+
+        # Create temporary random passwords - these will be reset
+        # by the users during their first login
+        import secrets
+        temp_password = secrets.token_urlsafe(12)
+        print(f"Generated temporary password for new users")
+
+        # Create users with appropriate roles if emails provided
+        created_users = []
+
+        if association.president_email:
+            # Use provided name or generate default name
+            president_name = association.president_name or f"President of {association.name}"
+            print(f"Creating president user: {president_name} ({association.president_email})")
+            president_user, created = User.objects.get_or_create(
+                email=association.president_email,
+                defaults={
+                    'association': association,
+                    'full_name': president_name,
+                    'role': president_role
+                }
+            )
+            # Only set password if this is a new user
+            if created:
+                print(f"New president user created. Setting password.")
+                president_user.set_password(temp_password)
+                president_user.save()
+                created_users.append(president_user)
+                print(f"Added president to list of created users")
+            else:
+                print(f"President user already exists. Skipping.")
+
+        if association.treasurer_email:
+            # Use provided name or generate default name
+            treasurer_name = association.treasurer_name or f"Treasurer of {association.name}"
+            print(f"Creating treasurer user: {treasurer_name} ({association.treasurer_email})")
+            treasurer_user, created = User.objects.get_or_create(
+                email=association.treasurer_email,
+                defaults={
+                    'association': association,
+                    'full_name': treasurer_name,
+                    'role': treasurer_role
+                }
+            )
+            if created:
+                print(f"New treasurer user created. Setting password.")
+                treasurer_user.set_password(temp_password)
+                treasurer_user.save()
+                created_users.append(treasurer_user)
+                print(f"Added treasurer to list of created users")
+            else:
+                print(f"Treasurer user already exists. Skipping.")
+
+        if association.secretary_email:
+            # Use provided name or generate default name
+            secretary_name = association.secretary_name or f"Secretary of {association.name}"
+            print(f"Creating secretary user: {secretary_name} ({association.secretary_email})")
+            secretary_user, created = User.objects.get_or_create(
+                email=association.secretary_email,
+                defaults={
+                    'association': association,
+                    'full_name': secretary_name,
+                    'role': secretary_role
+                }
+            )
+            if created:
+                print(f"New secretary user created. Setting password.")
+                secretary_user.set_password(temp_password)
+                secretary_user.save()
+                created_users.append(secretary_user)
+                print(f"Added secretary to list of created users")
+            else:
+                print(f"Secretary user already exists. Skipping.")
+
+        print(f"Total new users created: {len(created_users)}")
+
+        # Send password reset emails to all newly created users
+        for i, user in enumerate(created_users):
+            print(f"Sending password reset email to user {i + 1}/{len(created_users)}: {user.email}")
+            try:
+                self._send_password_setup_email(user)
+                print(f"Successfully initiated password reset for {user.email}")
+            except Exception as e:
+                print(f"Error sending password reset email to {user.email}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+    def _send_password_setup_email(self, user):
+        """
+        Send password reset email to newly created user
+        """
+        from django_rest_passwordreset.models import ResetPasswordToken
+        from django.template.loader import render_to_string
+        from django.core.mail import EmailMultiAlternatives
+        from django.utils.html import strip_tags
+
+        print(f"Creating password reset token for user: {user.email}")
+
+        # Create password reset token
+        try:
+            token = ResetPasswordToken.objects.create(
+                user=user,
+                user_agent="API",
+                ip_address="127.0.0.1"
+            )
+            print(f"Token created successfully: {token.key}")
+
+            # Generate reset link
+            sitelink = "http://localhost:5173/"
+            token_key = "{}".format(token.key)
+            full_link = str(sitelink) + str("password-reset/") + str(token_key)
+
+            print(token_key)
+            print(full_link)
+
+            context = {
+                'full_link': full_link,
+                'email_adress': user.email,
+                'full_name': user.full_name or user.email
+            }
+
+            print(f"Rendering email template for {user.email}")
+            html_message = render_to_string("backend/email.html", context=context)
+            plain_message = strip_tags(html_message)
+
+            print(f"Preparing email message for {user.email}")
+            msg = EmailMultiAlternatives(
+                subject="Request for resetting password for {title}".format(title=user.email),
+                body=plain_message,
+                from_email="sender@example.com",
+                to=[user.email]
+            )
+
+            msg.attach_alternative(html_message, "text/html")
+            print(f"Sending email to {user.email}")
+            msg.send()
+            print("Password reset email sent")
+
+        except Exception as e:
+            print(f"Error in _send_password_setup_email: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+
 class RegisterViewset(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
     serializer_class = RegisterSerializer

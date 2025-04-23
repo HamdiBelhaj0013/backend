@@ -11,13 +11,30 @@ class AssociationAccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = AssociationAccount
         fields = [
-            'id', 'name', 'email', 'cin_recto', 'cin_verso',
-            'matricule_fiscal', 'rne_document', 'is_verified',
+            'id', 'name', 'email',
+            'president_email', 'president_name',
+            'treasurer_email', 'treasurer_name',
+            'secretary_email', 'secretary_name',
+            'cin_recto', 'cin_verso', 'matricule_fiscal', 'rne_document', 'is_verified',
             'verification_date', 'verification_status', 'verification_notes'
         ]
         read_only_fields = [
             'is_verified', 'verification_date', 'verification_status', 'verification_notes'
         ]
+
+
+# Association Account Registration Serializer
+class AssociationRegisterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssociationAccount
+        fields = ('id', 'name', 'email',
+                'president_email', 'president_name',
+                'treasurer_email', 'treasurer_name',
+                'secretary_email', 'secretary_name',
+                'cin_recto', 'cin_verso', 'matricule_fiscal', 'rne_document')
+
+    def create(self, validated_data):
+        return super().create(validated_data)
 
 
 class AssociationVerificationSerializer(serializers.ModelSerializer):
@@ -90,16 +107,6 @@ class LoginSerializer(serializers.Serializer):
             }
 
         return ret
-
-
-# Association Account Registration Serializer
-class AssociationRegisterSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = AssociationAccount
-        fields = ('id', 'name', 'email', 'cin_recto', 'cin_verso', 'matricule_fiscal', 'rne_document')
-
-    def create(self, validated_data):
-        return super().create(validated_data)
 
 
 # User Registration Serializer

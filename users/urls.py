@@ -14,7 +14,6 @@ router.register('register-association', AssociationRegisterViewset, basename='re
 router.register('associations', AssociationListViewset, basename='associations')
 router.register('profile', UserProfileViewSet, basename='user-profile')
 router.register('roles', RoleViewSet, basename='roles')
-# Add association-verification to the main router instead of a separate router
 router.register('association-verification', AssociationAccountViewSet, basename='association-verification')
 
 urlpatterns = [
