@@ -17,16 +17,32 @@ from .document_extractor_utils import verify_association_document
 
 class AssociationAccountViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing association accounts
+    ViewSet for managing association accounts with improved access controls
     """
-    queryset = AssociationAccount.objects.all()
     serializer_class = AssociationAccountSerializer
+
+    def get_queryset(self):
+        """
+        Filter queryset based on user's permissions and association
+        """
+        user = self.request.user
+
+        # Admin users can see all associations
+        if user.is_superuser or user.is_staff:
+            return AssociationAccount.objects.all()
+
+        # Regular users can only see their own association
+        if user.association:
+            return AssociationAccount.objects.filter(id=user.association.id)
+
+        # Users without association don't see anything
+        return AssociationAccount.objects.none()
 
     def get_permissions(self):
         """
         Custom permissions:
         - Admin users can access all endpoints
-        - Regular users can only create and view their own account
+        - Regular users can only view their own account
         - Allow anonymous access for retrieve (GET) to check verification status
         """
         # Allow anonymous access for retrieve (GET) operation
@@ -38,6 +54,24 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
             return [IsAdminUser()]
 
         return [IsAuthenticated()]
+
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Override retrieve to check if user can access this association
+        """
+        instance = self.get_object()
+
+        # Non-admin users can only view their own association
+        if not (request.user.is_superuser or request.user.is_staff):
+            if request.user.association and request.user.association.id != instance.id:
+                return Response(
+                    {"error": "You don't have permission to access this association"},
+                    status=403
+                )
+
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
 
     def perform_create(self, serializer):
         """Override create to attempt automatic verification"""
@@ -545,7 +579,12 @@ class UserViewset(viewsets.ViewSet):
         if request.user.is_superuser:
             queryset = User.objects.all()
         else:
-            queryset = User.objects.filter(association=request.user.association)
+            # Ensure users only see members of their own association
+            if request.user.association:
+                queryset = User.objects.filter(association=request.user.association)
+            else:
+                # Users without an association (shouldn't happen, but as a safeguard)
+                queryset = User.objects.none()
 
         # Filter by role if specified
         role = request.query_params.get('role')
@@ -555,6 +594,22 @@ class UserViewset(viewsets.ViewSet):
         serializer = self.serializer_class(queryset, many=True)
         return Response(serializer.data)
 
+    def retrieve(self, request, pk=None):
+        """Get a specific user, ensuring they belong to the same association"""
+        User = get_user_model()
+        user = get_object_or_404(User, pk=pk)
+
+        # Check if the requested user belongs to the same association
+        if not request.user.is_superuser:
+            if user.association != request.user.association:
+                return Response(
+                    {"error": "You don't have permission to access this user"},
+                    status=403
+                )
+
+        serializer = self.serializer_class(user)
+        return Response(serializer.data)
+
     # Add ability to update a user's role (for presidents)
     @action(detail=True, methods=['post'])
     def assign_role(self, request, pk=None):
@@ -562,7 +617,16 @@ class UserViewset(viewsets.ViewSet):
         if not has_permission(request.user, 'members', 'edit'):
             return Response({"error": "You don't have permission to assign roles"}, status=403)
 
-        user = get_object_or_404(get_user_model(), pk=pk)
+        User = get_user_model()
+        user = get_object_or_404(User, pk=pk)
+
+        # Make sure the user being modified belongs to the same association
+        if user.association != request.user.association and not request.user.is_superuser:
+            return Response(
+                {"error": "You don't have permission to modify users from other associations"},
+                status=403
+            )
+
         role_id = request.data.get('role_id')
 
         if not role_id:
@@ -576,8 +640,6 @@ class UserViewset(viewsets.ViewSet):
 
         serializer = self.serializer_class(user)
         return Response(serializer.data)
-
-
 # Fetch List of Associations (For User Registration)
 class AssociationListViewset(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
