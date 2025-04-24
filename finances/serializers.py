@@ -16,15 +16,20 @@ from .models import Donor
 class DonorSerializer(serializers.ModelSerializer):
     # Using SerializerMethodField for read-only properties
     total_donations = serializers.SerializerMethodField()
+    created_by_details = UserProfileSerializer(source='created_by', read_only=True)
 
     class Meta:
         model = Donor
         fields = [
             'id', 'name', 'email', 'phone', 'address',
             'tax_id', 'notes', 'is_anonymous',
-            'created_at', 'updated_at', 'total_donations'
+            'created_at', 'updated_at', 'total_donations',
+            'created_by', 'created_by_details', 'association'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'total_donations']
+        read_only_fields = [
+            'id', 'created_at', 'updated_at', 'total_donations',
+            'created_by', 'created_by_details', 'association'
+        ]
 
     def get_total_donations(self, obj):
         # This calls the total_donations property on the model
