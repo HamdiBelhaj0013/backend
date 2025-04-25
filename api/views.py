@@ -90,16 +90,26 @@ class MemberViewset(viewsets.ViewSet):
         return Response(serializer.data)
 
     def create(self, request):
-        serializer = self.serializer_class(data=request.data)
-        if serializer.is_valid():
-            # Add association to the member automatically
-            if request.user.association:
-                serializer.save(association=request.user.association)
+        print("Create Member Data:", request.data)
+        # Ensure association is included in the data
+        data = request.data.copy()
+
+        # If user has an association, add it to the request data
+        if request.user.association:
+            # Don't modify the data dictionary directly
+            serializer = self.serializer_class(data=data)
+            if serializer.is_valid():
+                serializer.save(
+                    association=request.user.association,
+                    needs_profile_completion=data.get('needs_profile_completion', False)
+                )
+                return Response(serializer.data)
             else:
-                serializer.save()
-            return Response(serializer.data)
+                print(f"Create validation errors: {serializer.errors}")
+                return Response(serializer.errors, status=400)
         else:
-            return Response(serializer.errors, status=400)
+            # User doesn't have an association
+            return Response({"error": "You must be associated with an organization to create members"}, status=403)
 
     def retrieve(self, request, pk=None):
         queryset = self.get_queryset()
@@ -110,15 +120,20 @@ class MemberViewset(viewsets.ViewSet):
     def update(self, request, pk=None):
         queryset = self.get_queryset()
         member = get_object_or_404(queryset, pk=pk)
-        serializer = self.serializer_class(member, data=request.data)
+
+        print("Update Member Data:", request.data)
+        # Use partial=True to allow partial updates without requiring all fields
+        serializer = self.serializer_class(member, data=request.data, partial=True)
+
         if serializer.is_valid():
-            # Preserve the association when updating
-            if member.association:
-                serializer.save(association=member.association)
-            else:
-                serializer.save()
+            # Always preserve the existing association
+            serializer.save(
+                association=member.association,
+                needs_profile_completion=request.data.get('needs_profile_completion', member.needs_profile_completion)
+            )
             return Response(serializer.data)
         else:
+            print(f"Update validation errors: {serializer.errors}")
             return Response(serializer.errors, status=400)
 
     def destroy(self, request, pk=None):

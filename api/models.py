@@ -25,6 +25,8 @@ class Project(models.Model):
         return self.name
 
 
+# Update the Member model in models.py (from the members app)
+
 class Member(models.Model):
     name = models.CharField(max_length=100)
     address = models.CharField(max_length=100)
@@ -41,6 +43,8 @@ class Member(models.Model):
         related_name='members',
         null=True
     )
+    # New field to indicate if member profile needs completion
+    needs_profile_completion = models.BooleanField(default=False,help_text="Indicates if this member needs to complete their profile")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

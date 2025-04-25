@@ -31,8 +31,12 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
         if user.is_superuser or user.is_staff:
             return AssociationAccount.objects.all()
 
+        # Anonymous users (for verification endpoint)
+        if user.is_anonymous:
+            return AssociationAccount.objects.all()  # Or filter as needed for anonymous access
+
         # Regular users can only see their own association
-        if user.association:
+        if hasattr(user, 'association') and user.association:
             return AssociationAccount.objects.filter(id=user.association.id)
 
         # Users without association don't see anything
@@ -62,8 +66,9 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
 
         # Non-admin users can only view their own association
-        if not (request.user.is_superuser or request.user.is_staff):
-            if request.user.association and request.user.association.id != instance.id:
+        if not (request.user.is_superuser or request.user.is_staff) and not request.user.is_anonymous:
+            if hasattr(request.user,
+                       'association') and request.user.association and request.user.association.id != instance.id:
                 return Response(
                     {"error": "You don't have permission to access this association"},
                     status=403
@@ -92,73 +97,224 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
         from .document_extractor_utils import process_association_verification
         return process_association_verification(association)
 
+    # Update the _create_role_based_users method in views.py (AssociationAccountViewSet)
+
     def _create_role_based_users(self, association):
         """
         Create user accounts for president, treasurer, and secretary
-        with appropriate roles
+        with appropriate roles using their full names, and create corresponding Member objects
         """
         User = get_user_model()
+        print(f"Starting user creation for association: {association.name}")
 
         # Get the Role objects (creating them if they don't exist)
         president_role, _ = Role.objects.get_or_create(name='president')
         treasurer_role, _ = Role.objects.get_or_create(name='treasurer')
         secretary_role, _ = Role.objects.get_or_create(name='secretary')
 
-        # Create temporary random passwords - these will be reset
-        # by the users during their first login
+        # Generate temporary random password
         import secrets
+        from datetime import date
+        import datetime
         temp_password = secrets.token_urlsafe(12)
+        print(f"Generated temporary password for new users")
 
         # Create users with appropriate roles if emails provided
+        created_users = []
+
+        # Import Member model from members app
+        from api.models import Member
+
+        today = date.today()
+        default_birth_date = datetime.date(2000, 1, 1)
+
+        # List to store created member IDs for notification
+        created_member_ids = []
+
         if association.president_email:
+            # Use provided name or generate default name
+            president_name = association.president_name or f"President of {association.name}"
+            print(f"Creating president user: {president_name} ({association.president_email})")
+
+            # Create CustomUser first
             president_user, created = User.objects.get_or_create(
                 email=association.president_email,
                 defaults={
-                    'password': temp_password,
                     'association': association,
-                    'full_name': f"President of {association.name}",
+                    'full_name': president_name,
                     'role': president_role
                 }
             )
-            # Only send email if this is a new user
+
+            # Only set password if this is a new user
             if created:
-                # Hash password properly for new user
+                print(f"New president user created. Setting password.")
                 president_user.set_password(temp_password)
                 president_user.save()
-                # Send password reset email to set password
-                self._send_password_setup_email(president_user)
+                created_users.append(president_user)
+                print(f"Added president to list of created users")
 
+            # Create or update corresponding Member object
+            try:
+                member, member_created = Member.objects.get_or_create(
+                    email=association.president_email,
+                    defaults={
+                        'name': president_name,
+                        'address': "Please update your address",
+                        'nationality': "Please update your nationality",
+                        'birth_date': default_birth_date,
+                        'job': "Association President",
+                        'joining_date': today,
+                        'role': "Président",
+                        'association': association
+                    }
+                )
+
+                # Add a flag to indicate this member needs profile completion
+                if member_created:
+                    member.needs_profile_completion = True
+                    member.save()
+                    created_member_ids.append(member.id)
+                    print(f"Created new Member entry for president: {president_name}")
+                else:
+                    # Update member with association president role if it already exists
+                    if member.association != association or member.role != "Président":
+                        member.association = association
+                        member.role = "Président"
+                        member.save()
+                        print(f"Updated existing Member entry for president: {president_name}")
+            except Exception as e:
+                print(f"Error creating member for president: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        # Similar updates for treasurer and secretary with the needs_profile_completion flag
         if association.treasurer_email:
+            # Use provided name or generate default name
+            treasurer_name = association.treasurer_name or f"Treasurer of {association.name}"
+            print(f"Creating treasurer user: {treasurer_name} ({association.treasurer_email})")
+
+            # Create CustomUser first
             treasurer_user, created = User.objects.get_or_create(
                 email=association.treasurer_email,
                 defaults={
-                    'password': temp_password,
                     'association': association,
-                    'full_name': f"Treasurer of {association.name}",
+                    'full_name': treasurer_name,
                     'role': treasurer_role
                 }
             )
+
             if created:
+                print(f"New treasurer user created. Setting password.")
                 treasurer_user.set_password(temp_password)
                 treasurer_user.save()
-                # Send password reset email to set password
-                self._send_password_setup_email(treasurer_user)
+                created_users.append(treasurer_user)
+                print(f"Added treasurer to list of created users")
+
+            # Create or update corresponding Member object
+            try:
+                member, member_created = Member.objects.get_or_create(
+                    email=association.treasurer_email,
+                    defaults={
+                        'name': treasurer_name,
+                        'address': "Please update your address",
+                        'nationality': "Please update your nationality",
+                        'birth_date': default_birth_date,
+                        'job': "Association Treasurer",
+                        'joining_date': today,
+                        'role': "Trésorier",
+                        'association': association
+                    }
+                )
+
+                if member_created:
+                    member.needs_profile_completion = True
+                    member.save()
+                    created_member_ids.append(member.id)
+                    print(f"Created new Member entry for treasurer: {treasurer_name}")
+                else:
+                    # Update member with association treasurer role if it already exists
+                    if member.association != association or member.role != "Trésorier":
+                        member.association = association
+                        member.role = "Trésorier"
+                        member.save()
+                        print(f"Updated existing Member entry for treasurer: {treasurer_name}")
+            except Exception as e:
+                print(f"Error creating member for treasurer: {str(e)}")
+                import traceback
+                traceback.print_exc()
 
         if association.secretary_email:
+            # Use provided name or generate default name
+            secretary_name = association.secretary_name or f"Secretary of {association.name}"
+            print(f"Creating secretary user: {secretary_name} ({association.secretary_email})")
+
+            # Create CustomUser first
             secretary_user, created = User.objects.get_or_create(
                 email=association.secretary_email,
                 defaults={
-                    'password': temp_password,
                     'association': association,
-                    'full_name': f"Secretary of {association.name}",
+                    'full_name': secretary_name,
                     'role': secretary_role
                 }
             )
+
             if created:
+                print(f"New secretary user created. Setting password.")
                 secretary_user.set_password(temp_password)
                 secretary_user.save()
-                # Send password reset email to set password
-                self._send_password_setup_email(secretary_user)
+                created_users.append(secretary_user)
+                print(f"Added secretary to list of created users")
+
+            # Create or update corresponding Member object
+            try:
+                member, member_created = Member.objects.get_or_create(
+                    email=association.secretary_email,
+                    defaults={
+                        'name': secretary_name,
+                        'address': "Please update your address",
+                        'nationality': "Please update your nationality",
+                        'birth_date': default_birth_date,
+                        'job': "Association Secretary",
+                        'joining_date': today,
+                        'role': "Secrétaire générale",
+                        'association': association
+                    }
+                )
+
+                if member_created:
+                    member.needs_profile_completion = True
+                    member.save()
+                    created_member_ids.append(member.id)
+                    print(f"Created new Member entry for secretary: {secretary_name}")
+                else:
+                    # Update member with association secretary role if it already exists
+                    if member.association != association or member.role != "Secrétaire générale":
+                        member.association = association
+                        member.role = "Secrétaire générale"
+                        member.save()
+                        print(f"Updated existing Member entry for secretary: {secretary_name}")
+            except Exception as e:
+                print(f"Error creating member for secretary: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        print(f"Total new users created: {len(created_users)}")
+        print(f"Total new members created/flagged: {len(created_member_ids)}")
+
+        # Send password reset emails to all newly created users
+        for i, user in enumerate(created_users):
+            print(f"Sending password reset email to user {i + 1}/{len(created_users)}: {user.email}")
+            try:
+                self._send_password_setup_email(user)
+                print(f"Successfully initiated password reset for {user.email}")
+            except Exception as e:
+                print(f"Error sending password reset email to {user.email}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        # Return created member IDs for potential use in notifications
+        return created_member_ids
 
     def _send_password_setup_email(self, user):
         """
@@ -281,8 +437,10 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+
 class UserProfileViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
+    serializer_class = UserProfileSerializer  # Make sure this is defined
 
     def list(self, request):
         """
@@ -296,13 +454,21 @@ class UserProfileViewSet(viewsets.ViewSet):
         """
         Update user profile information
         """
+        # Don't try to use get_queryset() here since it's not defined
+        # Instead, use the user from the request
         user = request.user
+
+        print(f"Update request for user {user.id} with data: {request.data}")
+
         serializer = UserProfileSerializer(user, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
+            print(f"Serializer is valid. Validated data: {serializer.validated_data}")
+            updated_user = serializer.save()
+            print(f"User updated: {updated_user.id}")
             return Response(serializer.data)
-        return Response(serializer.errors, status=400)
-
+        else:
+            print(f"Serializer validation failed: {serializer.errors}")
+            return Response(serializer.errors, status=400)
 
 # Logout View
 class LogoutViewset(viewsets.ViewSet):
@@ -343,6 +509,8 @@ class LoginViewset(viewsets.ViewSet):
 
 # Association Registration View
 # Association Registration View
+# Update the create method in AssociationRegisterViewset to use AssociationAccountViewSet directly
+
 class AssociationRegisterViewset(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
     serializer_class = AssociationRegisterSerializer
@@ -364,7 +532,9 @@ class AssociationRegisterViewset(viewsets.ViewSet):
                 # Only create user accounts if verification was successful
                 if association.is_verified:
                     print(f"Association verified. Creating user accounts for: {association.name}")
-                    self._create_role_based_users(association)
+                    # Create instance of AssociationAccountViewSet and use its method
+                    account_viewset = AssociationAccountViewSet()
+                    account_viewset._create_role_based_users(association)
                 else:
                     print(f"Association not verified. User accounts not created.")
 
@@ -373,161 +543,7 @@ class AssociationRegisterViewset(viewsets.ViewSet):
             return Response(updated_serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
-    def _create_role_based_users(self, association):
-        """
-        Create user accounts for president, treasurer, and secretary
-        with appropriate roles using their full names
-        """
-        User = get_user_model()
-        print(f"Starting user creation for association: {association.name}")
 
-        # Get the Role objects (creating them if they don't exist)
-        president_role, _ = Role.objects.get_or_create(name='president')
-        treasurer_role, _ = Role.objects.get_or_create(name='treasurer')
-        secretary_role, _ = Role.objects.get_or_create(name='secretary')
-
-        # Create temporary random passwords - these will be reset
-        # by the users during their first login
-        import secrets
-        temp_password = secrets.token_urlsafe(12)
-        print(f"Generated temporary password for new users")
-
-        # Create users with appropriate roles if emails provided
-        created_users = []
-
-        if association.president_email:
-            # Use provided name or generate default name
-            president_name = association.president_name or f"President of {association.name}"
-            print(f"Creating president user: {president_name} ({association.president_email})")
-            president_user, created = User.objects.get_or_create(
-                email=association.president_email,
-                defaults={
-                    'association': association,
-                    'full_name': president_name,
-                    'role': president_role
-                }
-            )
-            # Only set password if this is a new user
-            if created:
-                print(f"New president user created. Setting password.")
-                president_user.set_password(temp_password)
-                president_user.save()
-                created_users.append(president_user)
-                print(f"Added president to list of created users")
-            else:
-                print(f"President user already exists. Skipping.")
-
-        if association.treasurer_email:
-            # Use provided name or generate default name
-            treasurer_name = association.treasurer_name or f"Treasurer of {association.name}"
-            print(f"Creating treasurer user: {treasurer_name} ({association.treasurer_email})")
-            treasurer_user, created = User.objects.get_or_create(
-                email=association.treasurer_email,
-                defaults={
-                    'association': association,
-                    'full_name': treasurer_name,
-                    'role': treasurer_role
-                }
-            )
-            if created:
-                print(f"New treasurer user created. Setting password.")
-                treasurer_user.set_password(temp_password)
-                treasurer_user.save()
-                created_users.append(treasurer_user)
-                print(f"Added treasurer to list of created users")
-            else:
-                print(f"Treasurer user already exists. Skipping.")
-
-        if association.secretary_email:
-            # Use provided name or generate default name
-            secretary_name = association.secretary_name or f"Secretary of {association.name}"
-            print(f"Creating secretary user: {secretary_name} ({association.secretary_email})")
-            secretary_user, created = User.objects.get_or_create(
-                email=association.secretary_email,
-                defaults={
-                    'association': association,
-                    'full_name': secretary_name,
-                    'role': secretary_role
-                }
-            )
-            if created:
-                print(f"New secretary user created. Setting password.")
-                secretary_user.set_password(temp_password)
-                secretary_user.save()
-                created_users.append(secretary_user)
-                print(f"Added secretary to list of created users")
-            else:
-                print(f"Secretary user already exists. Skipping.")
-
-        print(f"Total new users created: {len(created_users)}")
-
-        # Send password reset emails to all newly created users
-        for i, user in enumerate(created_users):
-            print(f"Sending password reset email to user {i + 1}/{len(created_users)}: {user.email}")
-            try:
-                self._send_password_setup_email(user)
-                print(f"Successfully initiated password reset for {user.email}")
-            except Exception as e:
-                print(f"Error sending password reset email to {user.email}: {str(e)}")
-                import traceback
-                traceback.print_exc()
-
-    def _send_password_setup_email(self, user):
-        """
-        Send password reset email to newly created user
-        """
-        from django_rest_passwordreset.models import ResetPasswordToken
-        from django.template.loader import render_to_string
-        from django.core.mail import EmailMultiAlternatives
-        from django.utils.html import strip_tags
-
-        print(f"Creating password reset token for user: {user.email}")
-
-        # Create password reset token
-        try:
-            token = ResetPasswordToken.objects.create(
-                user=user,
-                user_agent="API",
-                ip_address="127.0.0.1"
-            )
-            print(f"Token created successfully: {token.key}")
-
-            # Generate reset link
-            sitelink = "http://localhost:5173/"
-            token_key = "{}".format(token.key)
-            full_link = str(sitelink) + str("password-reset/") + str(token_key)
-
-            print(token_key)
-            print(full_link)
-
-            context = {
-                'full_link': full_link,
-                'email_adress': user.email,
-                'full_name': user.full_name or user.email
-            }
-
-            print(f"Rendering email template for {user.email}")
-            html_message = render_to_string("backend/email.html", context=context)
-            plain_message = strip_tags(html_message)
-
-            print(f"Preparing email message for {user.email}")
-            msg = EmailMultiAlternatives(
-                subject="Request for resetting password for {title}".format(title=user.email),
-                body=plain_message,
-                from_email="sender@example.com",
-                to=[user.email]
-            )
-
-            msg.attach_alternative(html_message, "text/html")
-            print(f"Sending email to {user.email}")
-            msg.send()
-            print("Password reset email sent")
-
-        except Exception as e:
-            print(f"Error in _send_password_setup_email: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            raise
 
 
 class RegisterViewset(viewsets.ViewSet):
@@ -552,7 +568,222 @@ class RegisterViewset(viewsets.ViewSet):
             return Response(serializer.data, status=201)
 
         return Response(serializer.errors, status=400)
+    def _create_role_based_users(self, association):
+        """
+        Create user accounts for president, treasurer, and secretary
+        with appropriate roles using their full names, and create corresponding Member objects
+        """
+        User = get_user_model()
+        print(f"Starting user creation for association: {association.name}")
 
+        # Get the Role objects (creating them if they don't exist)
+        president_role, _ = Role.objects.get_or_create(name='president')
+        treasurer_role, _ = Role.objects.get_or_create(name='treasurer')
+        secretary_role, _ = Role.objects.get_or_create(name='secretary')
+
+        # Generate temporary random password
+        import secrets
+        from datetime import date
+        import datetime
+        temp_password = secrets.token_urlsafe(12)
+        print(f"Generated temporary password for new users")
+
+        # Create users with appropriate roles if emails provided
+        created_users = []
+
+        # Import Member model from members app
+        from api.models import Member
+
+        today = date.today()
+        default_birth_date = datetime.date(2000, 1, 1)
+
+        # List to store created member IDs for notification
+        created_member_ids = []
+
+        if association.president_email:
+            # Use provided name or generate default name
+            president_name = association.president_name or f"President of {association.name}"
+            print(f"Creating president user: {president_name} ({association.president_email})")
+
+            # Create CustomUser first
+            president_user, created = User.objects.get_or_create(
+                email=association.president_email,
+                defaults={
+                    'association': association,
+                    'full_name': president_name,
+                    'role': president_role
+                }
+            )
+
+            # Only set password if this is a new user
+            if created:
+                print(f"New president user created. Setting password.")
+                president_user.set_password(temp_password)
+                president_user.save()
+                created_users.append(president_user)
+                print(f"Added president to list of created users")
+
+            # Create or update corresponding Member object
+            try:
+                member, member_created = Member.objects.get_or_create(
+                    email=association.president_email,
+                    defaults={
+                        'name': president_name,
+                        'address': "Please update your address",
+                        'nationality': "Please update your nationality",
+                        'birth_date': default_birth_date,
+                        'job': "Association President",
+                        'joining_date': today,
+                        'role': "Président",
+                        'association': association
+                    }
+                )
+
+                # Add a flag to indicate this member needs profile completion
+                if member_created:
+                    member.needs_profile_completion = True
+                    member.save()
+                    created_member_ids.append(member.id)
+                    print(f"Created new Member entry for president: {president_name}")
+                else:
+                    # Update member with association president role if it already exists
+                    if member.association != association or member.role != "Président":
+                        member.association = association
+                        member.role = "Président"
+                        member.save()
+                        print(f"Updated existing Member entry for president: {president_name}")
+            except Exception as e:
+                print(f"Error creating member for president: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        # Similar updates for treasurer and secretary with the needs_profile_completion flag
+        if association.treasurer_email:
+            # Use provided name or generate default name
+            treasurer_name = association.treasurer_name or f"Treasurer of {association.name}"
+            print(f"Creating treasurer user: {treasurer_name} ({association.treasurer_email})")
+
+            # Create CustomUser first
+            treasurer_user, created = User.objects.get_or_create(
+                email=association.treasurer_email,
+                defaults={
+                    'association': association,
+                    'full_name': treasurer_name,
+                    'role': treasurer_role
+                }
+            )
+
+            if created:
+                print(f"New treasurer user created. Setting password.")
+                treasurer_user.set_password(temp_password)
+                treasurer_user.save()
+                created_users.append(treasurer_user)
+                print(f"Added treasurer to list of created users")
+
+            # Create or update corresponding Member object
+            try:
+                member, member_created = Member.objects.get_or_create(
+                    email=association.treasurer_email,
+                    defaults={
+                        'name': treasurer_name,
+                        'address': "Please update your address",
+                        'nationality': "Please update your nationality",
+                        'birth_date': default_birth_date,
+                        'job': "Association Treasurer",
+                        'joining_date': today,
+                        'role': "Trésorier",
+                        'association': association
+                    }
+                )
+
+                if member_created:
+                    member.needs_profile_completion = True
+                    member.save()
+                    created_member_ids.append(member.id)
+                    print(f"Created new Member entry for treasurer: {treasurer_name}")
+                else:
+                    # Update member with association treasurer role if it already exists
+                    if member.association != association or member.role != "Trésorier":
+                        member.association = association
+                        member.role = "Trésorier"
+                        member.save()
+                        print(f"Updated existing Member entry for treasurer: {treasurer_name}")
+            except Exception as e:
+                print(f"Error creating member for treasurer: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        if association.secretary_email:
+            # Use provided name or generate default name
+            secretary_name = association.secretary_name or f"Secretary of {association.name}"
+            print(f"Creating secretary user: {secretary_name} ({association.secretary_email})")
+
+            # Create CustomUser first
+            secretary_user, created = User.objects.get_or_create(
+                email=association.secretary_email,
+                defaults={
+                    'association': association,
+                    'full_name': secretary_name,
+                    'role': secretary_role
+                }
+            )
+
+            if created:
+                print(f"New secretary user created. Setting password.")
+                secretary_user.set_password(temp_password)
+                secretary_user.save()
+                created_users.append(secretary_user)
+                print(f"Added secretary to list of created users")
+
+            # Create or update corresponding Member object
+            try:
+                member, member_created = Member.objects.get_or_create(
+                    email=association.secretary_email,
+                    defaults={
+                        'name': secretary_name,
+                        'address': "Please update your address",
+                        'nationality': "Please update your nationality",
+                        'birth_date': default_birth_date,
+                        'job': "Association Secretary",
+                        'joining_date': today,
+                        'role': "Secrétaire générale",
+                        'association': association
+                    }
+                )
+
+                if member_created:
+                    member.needs_profile_completion = True
+                    member.save()
+                    created_member_ids.append(member.id)
+                    print(f"Created new Member entry for secretary: {secretary_name}")
+                else:
+                    # Update member with association secretary role if it already exists
+                    if member.association != association or member.role != "Secrétaire générale":
+                        member.association = association
+                        member.role = "Secrétaire générale"
+                        member.save()
+                        print(f"Updated existing Member entry for secretary: {secretary_name}")
+            except Exception as e:
+                print(f"Error creating member for secretary: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        print(f"Total new users created: {len(created_users)}")
+        print(f"Total new members created/flagged: {len(created_member_ids)}")
+
+        # Send password reset emails to all newly created users
+        for i, user in enumerate(created_users):
+            print(f"Sending password reset email to user {i + 1}/{len(created_users)}: {user.email}")
+            try:
+                self._send_password_setup_email(user)
+                print(f"Successfully initiated password reset for {user.email}")
+            except Exception as e:
+                print(f"Error sending password reset email to {user.email}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        # Return created member IDs for potential use in notifications
+        return created_member_ids
 
 # Fetch Users (Admins see their own association users)
 from .models import Role
