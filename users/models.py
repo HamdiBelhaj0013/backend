@@ -87,6 +87,8 @@ class Role(models.Model):
 
 
 # Custom User Model
+# models.py - Add is_validated field to CustomUser model
+
 class CustomUser(AbstractUser):
     email = models.EmailField(max_length=200, unique=True)
     username = models.CharField(max_length=200, null=True, blank=True)
@@ -105,11 +107,21 @@ class CustomUser(AbstractUser):
         blank=True,
         related_name='users'
     )
+    # New fields for user validation
+    is_validated = models.BooleanField(default=False, help_text="Indicates if the user has been validated by admin")
+    validated_by = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='validated_users'
+    )
+    validation_date = models.DateTimeField(null=True, blank=True)
 
     objects = CustomUserManager()
 
     USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = []  # Removed association from required fields
+    REQUIRED_FIELDS = []
 
     def __str__(self):
         if self.full_name:

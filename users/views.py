@@ -5,11 +5,10 @@ from knox.models import AuthToken
 from .serializers import *
 from .serializers import UserProfileSerializer
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django.utils import timezone
-
+from rest_framework.decorators import action
+from rest_framework.response import Response
 from .models import AssociationAccount, Role, CustomUser
 from .serializers import AssociationAccountSerializer, AssociationVerificationSerializer
 from .document_extractor_utils import verify_association_document
@@ -495,21 +494,25 @@ class LoginViewset(viewsets.ViewSet):
             password = serializer.validated_data['password']
             user = authenticate(request, email=email, password=password)
             if user:
-                _, token = AuthToken.objects.create(user)
-                return Response(
-                    {
-                        "user": self.serializer_class(user).data,
-                        "token": token
-                    }
-                )
+                # Check if the user is validated or has a role that doesn't need validation
+                is_admin_role = user.is_superuser or (
+                            user.role and user.role.name in ['president', 'treasurer', 'secretary'])
+
+                if user.is_validated or is_admin_role:
+                    _, token = AuthToken.objects.create(user)
+                    return Response(
+                        {
+                            "user": self.serializer_class(user).data,
+                            "token": token
+                        }
+                    )
+                else:
+                    return Response({
+                                        "error": "Your account is pending validation. Please wait for approval from an administrator."},
+                                    status=403)
             else:
                 return Response({"error": "Invalid credentials"}, status=401)
         return Response(serializer.errors, status=400)
-
-
-# Association Registration View
-# Association Registration View
-# Update the create method in AssociationRegisterViewset to use AssociationAccountViewSet directly
 
 class AssociationRegisterViewset(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
@@ -822,55 +825,54 @@ class UserViewset(viewsets.ViewSet):
         if role:
             queryset = queryset.filter(role__name=role)
 
+        # Filter by validation status if specified
+        validation_status = request.query_params.get('validation_status')
+        if validation_status:
+            is_validated = validation_status.lower() == 'validated'
+            queryset = queryset.filter(is_validated=is_validated)
+
         serializer = self.serializer_class(queryset, many=True)
         return Response(serializer.data)
 
-    def retrieve(self, request, pk=None):
-        """Get a specific user, ensuring they belong to the same association"""
-        User = get_user_model()
-        user = get_object_or_404(User, pk=pk)
-
-        # Check if the requested user belongs to the same association
-        if not request.user.is_superuser:
-            if user.association != request.user.association:
-                return Response(
-                    {"error": "You don't have permission to access this user"},
-                    status=403
-                )
-
-        serializer = self.serializer_class(user)
-        return Response(serializer.data)
-
-    # Add ability to update a user's role (for presidents)
+    # Add a new endpoint to validate users
     @action(detail=True, methods=['post'])
-    def assign_role(self, request, pk=None):
-        # Check if user has permission to manage roles
-        if not has_permission(request.user, 'members', 'edit'):
-            return Response({"error": "You don't have permission to assign roles"}, status=403)
-
-        User = get_user_model()
-        user = get_object_or_404(User, pk=pk)
-
-        # Make sure the user being modified belongs to the same association
-        if user.association != request.user.association and not request.user.is_superuser:
+    def validate_user(self, request, pk=None):
+        """Validate or reject a user"""
+        # Check if user has permission to validate members
+        if not (request.user.is_superuser or
+                (request.user.role and request.user.role.name in ['president', 'treasurer', 'secretary'])):
             return Response(
-                {"error": "You don't have permission to modify users from other associations"},
+                {"error": "You don't have permission to validate users"},
                 status=403
             )
 
-        role_id = request.data.get('role_id')
+        User = get_user_model()
+        user_to_validate = get_object_or_404(User, pk=pk)
 
-        if not role_id:
-            return Response({"error": "Role ID is required"}, status=400)
+        # Make sure the user being validated belongs to the same association
+        if user_to_validate.association != request.user.association and not request.user.is_superuser:
+            return Response(
+                {"error": "You don't have permission to validate users from other associations"},
+                status=403
+            )
 
-        role = get_object_or_404(Role, pk=role_id)
+        # Validate the user
+        action_type = request.data.get('action', 'validate')
 
-        # Update the user's role
-        user.role = role
-        user.save()
+        if action_type == 'validate':
+            user_to_validate.is_validated = True
+            user_to_validate.validated_by = request.user
+            user_to_validate.validation_date = timezone.now()
+            user_to_validate.save()
+            return Response({"message": f"User {user_to_validate.email} has been validated"})
+        elif action_type == 'reject':
+            user_to_validate.is_validated = False
+            user_to_validate.save()
+            return Response({"message": f"User {user_to_validate.email} has been rejected"})
+        else:
+            return Response({"error": "Invalid action. Use 'validate' or 'reject'"}, status=400)
 
-        serializer = self.serializer_class(user)
-        return Response(serializer.data)
+
 # Fetch List of Associations (For User Registration)
 class AssociationListViewset(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]

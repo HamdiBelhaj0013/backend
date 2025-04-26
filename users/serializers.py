@@ -121,8 +121,8 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'email', 'password', 'full_name', 'association_id', 'association')
-        extra_kwargs = {'password': {'write_only': True}}
+        fields = ('id', 'email', 'password', 'full_name', 'association_id', 'association', 'is_validated')
+        extra_kwargs = {'password': {'write_only': True}, 'is_validated': {'read_only': True}}
 
     def get_association(self, obj):
         """ Return association details in response """
@@ -132,7 +132,22 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         password = validated_data.pop('password')
-        user = User.objects.create_user(**validated_data)
-        user.set_password(password)  # Ensure password is hashed
+        # Set role to 'member' (role_id=4) by default
+        member_role = Role.objects.get_or_create(name='member')[0]
+
+        user = User.objects.create_user(
+            **validated_data,
+            role=member_role,
+            is_validated=False  # New users start as unvalidated
+        )
+        user.set_password(password)
         user.save()
         return user
+
+
+# Add a new serializer for user validation
+class UserValidationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'is_validated', 'validated_by', 'validation_date']
+        read_only_fields = ['id', 'validated_by', 'validation_date']
