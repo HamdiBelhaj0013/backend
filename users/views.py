@@ -101,7 +101,8 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
     def _create_role_based_users(self, association):
         """
         Create user accounts for president, treasurer, and secretary
-        with appropriate roles using their full names, and create corresponding Member objects
+        with appropriate roles using their full names, and create corresponding Member objects.
+        These accounts are automatically verified.
         """
         User = get_user_model()
         print(f"Starting user creation for association: {association.name}")
@@ -130,6 +131,9 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
         # List to store created member IDs for notification
         created_member_ids = []
 
+        # Current time for validation timestamp
+        current_time = timezone.now()
+
         if association.president_email:
             # Use provided name or generate default name
             president_name = association.president_name or f"President of {association.name}"
@@ -141,7 +145,9 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 defaults={
                     'association': association,
                     'full_name': president_name,
-                    'role': president_role
+                    'role': president_role,
+                    'is_validated': True,  # Set to True by default
+                    'validation_date': current_time  # Set validation date
                 }
             )
 
@@ -152,6 +158,12 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 president_user.save()
                 created_users.append(president_user)
                 print(f"Added president to list of created users")
+            elif not president_user.is_validated:
+                # If user exists but wasn't validated, validate them now
+                president_user.is_validated = True
+                president_user.validation_date = current_time
+                president_user.save()
+                print(f"Existing president user validated")
 
             # Create or update corresponding Member object
             try:
@@ -187,7 +199,7 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 import traceback
                 traceback.print_exc()
 
-        # Similar updates for treasurer and secretary with the needs_profile_completion flag
+        # Similar updates for treasurer with automatic verification
         if association.treasurer_email:
             # Use provided name or generate default name
             treasurer_name = association.treasurer_name or f"Treasurer of {association.name}"
@@ -199,7 +211,9 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 defaults={
                     'association': association,
                     'full_name': treasurer_name,
-                    'role': treasurer_role
+                    'role': treasurer_role,
+                    'is_validated': True,  # Set to True by default
+                    'validation_date': current_time  # Set validation date
                 }
             )
 
@@ -209,6 +223,12 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 treasurer_user.save()
                 created_users.append(treasurer_user)
                 print(f"Added treasurer to list of created users")
+            elif not treasurer_user.is_validated:
+                # If user exists but wasn't validated, validate them now
+                treasurer_user.is_validated = True
+                treasurer_user.validation_date = current_time
+                treasurer_user.save()
+                print(f"Existing treasurer user validated")
 
             # Create or update corresponding Member object
             try:
@@ -243,6 +263,7 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 import traceback
                 traceback.print_exc()
 
+        # Similar updates for secretary with automatic verification
         if association.secretary_email:
             # Use provided name or generate default name
             secretary_name = association.secretary_name or f"Secretary of {association.name}"
@@ -254,7 +275,9 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 defaults={
                     'association': association,
                     'full_name': secretary_name,
-                    'role': secretary_role
+                    'role': secretary_role,
+                    'is_validated': True,  # Set to True by default
+                    'validation_date': current_time  # Set validation date
                 }
             )
 
@@ -264,6 +287,12 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 secretary_user.save()
                 created_users.append(secretary_user)
                 print(f"Added secretary to list of created users")
+            elif not secretary_user.is_validated:
+                # If user exists but wasn't validated, validate them now
+                secretary_user.is_validated = True
+                secretary_user.validation_date = current_time
+                secretary_user.save()
+                print(f"Existing secretary user validated")
 
             # Create or update corresponding Member object
             try:
@@ -488,30 +517,37 @@ class LoginViewset(viewsets.ViewSet):
     serializer_class = LoginSerializer
 
     def create(self, request):
+        print(f"Login request: {request.data}")
         serializer = self.serializer_class(data=request.data)
         if serializer.is_valid():
             email = serializer.validated_data['email']
             password = serializer.validated_data['password']
             user = authenticate(request, email=email, password=password)
             if user:
-                # Check if the user is validated or has a role that doesn't need validation
                 is_admin_role = user.is_superuser or (
-                            user.role and user.role.name in ['president', 'treasurer', 'secretary'])
-
+                        user.role and user.role.name in ['president', 'treasurer', 'secretary'])
                 if user.is_validated or is_admin_role:
+                    # Login successful
                     _, token = AuthToken.objects.create(user)
-                    return Response(
-                        {
-                            "user": self.serializer_class(user).data,
-                            "token": token
-                        }
-                    )
+                    response_data = {
+                        "user": self.serializer_class(user).data,
+                        "token": token
+                    }
+                    print(f"Login successful: {response_data}")
+                    return Response(response_data)
                 else:
-                    return Response({
-                                        "error": "Your account is pending validation. Please wait for approval from an administrator."},
-                                    status=403)
+                    # Pending validation
+                    error_response = {
+                        "error": "Your account is pending validation. Please wait for approval from an administrator."}
+                    print(f"Login rejected - pending validation: {error_response}")
+                    return Response(error_response, status=403)
             else:
-                return Response({"error": "Invalid credentials"}, status=401)
+                # Invalid credentials
+                error_response = {"error": "Invalid credentials"}
+                print(f"Login rejected - invalid credentials: {error_response}")
+                return Response(error_response, status=401)
+        # Invalid data
+        print(f"Login rejected - invalid data: {serializer.errors}")
         return Response(serializer.errors, status=400)
 
 class AssociationRegisterViewset(viewsets.ViewSet):
@@ -571,10 +607,12 @@ class RegisterViewset(viewsets.ViewSet):
             return Response(serializer.data, status=201)
 
         return Response(serializer.errors, status=400)
+
     def _create_role_based_users(self, association):
         """
         Create user accounts for president, treasurer, and secretary
-        with appropriate roles using their full names, and create corresponding Member objects
+        with appropriate roles using their full names, and create corresponding Member objects.
+        These accounts are automatically verified.
         """
         User = get_user_model()
         print(f"Starting user creation for association: {association.name}")
@@ -603,6 +641,9 @@ class RegisterViewset(viewsets.ViewSet):
         # List to store created member IDs for notification
         created_member_ids = []
 
+        # Current time for validation timestamp
+        current_time = timezone.now()
+
         if association.president_email:
             # Use provided name or generate default name
             president_name = association.president_name or f"President of {association.name}"
@@ -614,7 +655,9 @@ class RegisterViewset(viewsets.ViewSet):
                 defaults={
                     'association': association,
                     'full_name': president_name,
-                    'role': president_role
+                    'role': president_role,
+                    'is_validated': True,  # Set to True by default
+                    'validation_date': current_time  # Set validation date
                 }
             )
 
@@ -625,6 +668,12 @@ class RegisterViewset(viewsets.ViewSet):
                 president_user.save()
                 created_users.append(president_user)
                 print(f"Added president to list of created users")
+            elif not president_user.is_validated:
+                # If user exists but wasn't validated, validate them now
+                president_user.is_validated = True
+                president_user.validation_date = current_time
+                president_user.save()
+                print(f"Existing president user validated")
 
             # Create or update corresponding Member object
             try:
@@ -660,7 +709,7 @@ class RegisterViewset(viewsets.ViewSet):
                 import traceback
                 traceback.print_exc()
 
-        # Similar updates for treasurer and secretary with the needs_profile_completion flag
+        # Similar updates for treasurer with automatic verification
         if association.treasurer_email:
             # Use provided name or generate default name
             treasurer_name = association.treasurer_name or f"Treasurer of {association.name}"
@@ -672,7 +721,9 @@ class RegisterViewset(viewsets.ViewSet):
                 defaults={
                     'association': association,
                     'full_name': treasurer_name,
-                    'role': treasurer_role
+                    'role': treasurer_role,
+                    'is_validated': True,  # Set to True by default
+                    'validation_date': current_time  # Set validation date
                 }
             )
 
@@ -682,6 +733,12 @@ class RegisterViewset(viewsets.ViewSet):
                 treasurer_user.save()
                 created_users.append(treasurer_user)
                 print(f"Added treasurer to list of created users")
+            elif not treasurer_user.is_validated:
+                # If user exists but wasn't validated, validate them now
+                treasurer_user.is_validated = True
+                treasurer_user.validation_date = current_time
+                treasurer_user.save()
+                print(f"Existing treasurer user validated")
 
             # Create or update corresponding Member object
             try:
@@ -716,6 +773,7 @@ class RegisterViewset(viewsets.ViewSet):
                 import traceback
                 traceback.print_exc()
 
+        # Similar updates for secretary with automatic verification
         if association.secretary_email:
             # Use provided name or generate default name
             secretary_name = association.secretary_name or f"Secretary of {association.name}"
@@ -727,7 +785,9 @@ class RegisterViewset(viewsets.ViewSet):
                 defaults={
                     'association': association,
                     'full_name': secretary_name,
-                    'role': secretary_role
+                    'role': secretary_role,
+                    'is_validated': True,  # Set to True by default
+                    'validation_date': current_time  # Set validation date
                 }
             )
 
@@ -737,6 +797,12 @@ class RegisterViewset(viewsets.ViewSet):
                 secretary_user.save()
                 created_users.append(secretary_user)
                 print(f"Added secretary to list of created users")
+            elif not secretary_user.is_validated:
+                # If user exists but wasn't validated, validate them now
+                secretary_user.is_validated = True
+                secretary_user.validation_date = current_time
+                secretary_user.save()
+                print(f"Existing secretary user validated")
 
             # Create or update corresponding Member object
             try:
@@ -837,37 +903,108 @@ class UserViewset(viewsets.ViewSet):
     # Add a new endpoint to validate users
     @action(detail=True, methods=['post'])
     def validate_user(self, request, pk=None):
-        """Validate or reject a user"""
-        # Check if user has permission to validate members
-        if not (request.user.is_superuser or
-                (request.user.role and request.user.role.name in ['president', 'treasurer', 'secretary'])):
-            return Response(
-                {"error": "You don't have permission to validate users"},
-                status=403
-            )
+        """Validate or reject a user and create corresponding Member record if validated"""
+        # Enhanced debugging
+        print(f"validate_user called for user ID: {pk}")
+        print(f"Current user: {request.user.email}, is_superuser: {request.user.is_superuser}")
+        print(f"Request data: {request.data}")
+        if hasattr(request.user, 'role') and request.user.role:
+            print(f"Current user role: {request.user.role.name}")
+        else:
+            print("Current user has no role assigned")
 
+        # Get the user to validate
         User = get_user_model()
-        user_to_validate = get_object_or_404(User, pk=pk)
-
-        # Make sure the user being validated belongs to the same association
-        if user_to_validate.association != request.user.association and not request.user.is_superuser:
+        try:
+            user_to_validate = get_object_or_404(User, pk=pk)
+            print(f"Found user to validate: {user_to_validate.email}")
+        except Exception as e:
+            print(f"Error finding user with ID {pk}: {str(e)}")
             return Response(
-                {"error": "You don't have permission to validate users from other associations"},
-                status=403
+                {"error": f"User with ID {pk} not found"},
+                status=404
             )
 
-        # Validate the user
+        # Check for same association (skip for superusers)
+        if not request.user.is_superuser and hasattr(request.user, 'association') and request.user.association:
+            if not hasattr(user_to_validate, 'association') or not user_to_validate.association:
+                print(f"User to validate {user_to_validate.email} has no association")
+                return Response(
+                    {"error": "The user you are trying to validate is not associated with any organization"},
+                    status=400
+                )
+
+            if user_to_validate.association.id != request.user.association.id:
+                print(
+                    f"Association mismatch: Current user: {request.user.association.id}, User to validate: {user_to_validate.association.id}")
+                return Response(
+                    {"error": "You don't have permission to validate users from other associations"},
+                    status=403
+                )
+
+        # Get action type with validation
         action_type = request.data.get('action', 'validate')
+        print(f"Action type: {action_type}")
 
         if action_type == 'validate':
+            # Validate the user
             user_to_validate.is_validated = True
             user_to_validate.validated_by = request.user
             user_to_validate.validation_date = timezone.now()
             user_to_validate.save()
-            return Response({"message": f"User {user_to_validate.email} has been validated"})
+            print(f"User {user_to_validate.email} validated successfully")
+
+            # After validation, create a corresponding Member entry
+            try:
+                # Import Member model
+                from api.models import Member
+                from datetime import date
+                import datetime
+
+                today = date.today()
+                default_birth_date = datetime.date(2000, 1, 1)
+
+                # Check if a Member with this email already exists
+                member, created = Member.objects.get_or_create(
+                    email=user_to_validate.email,
+                    defaults={
+                        'name': user_to_validate.full_name or user_to_validate.email,
+                        'address': "Please update your address",
+                        'nationality': "Please update your nationality",
+                        'birth_date': default_birth_date,
+                        'job': "Please update your job",
+                        'joining_date': today,
+                        'role': "Membre",  # Default role for regular members
+                        'association': user_to_validate.association,
+                        'needs_profile_completion': True  # Flag to indicate profile needs completion
+                    }
+                )
+
+                if created:
+                    print(f"Created new Member entry for validated user: {user_to_validate.email}")
+                else:
+                    # If member already exists, make sure it's associated with the right association
+                    if member.association != user_to_validate.association:
+                        member.association = user_to_validate.association
+                        member.save()
+                        print(f"Updated existing Member entry for validated user: {user_to_validate.email}")
+                    else:
+                        print(f"Member record already exists for user: {user_to_validate.email}")
+
+            except Exception as e:
+                print(f"Error creating member record for validated user: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                # Continue even if member creation fails
+
+            # Success response
+            return Response({
+                "message": f"User {user_to_validate.email} has been validated and added to members"
+            })
         elif action_type == 'reject':
             user_to_validate.is_validated = False
             user_to_validate.save()
+            print(f"User {user_to_validate.email} rejected")
             return Response({"message": f"User {user_to_validate.email} has been rejected"})
         else:
             return Response({"error": "Invalid action. Use 'validate' or 'reject'"}, status=400)

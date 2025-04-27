@@ -147,102 +147,121 @@ def generate_pdf_report(report_instance):
     return report_instance
 
 
-def get_financial_statistics(start_date=None, end_date=None, association=None):
+def get_financial_statistics(start_date, end_date, association=None):
     """
-    Get financial statistics for a given period and association
+    Get financial statistics for a date range, optionally filtered by association
     """
     from .models import Transaction, BudgetAllocation
-    from api.models import Project  # Make sure to import Project
+    from django.db.models import Sum, Q
+    from decimal import Decimal
 
-    # Set default date range if not specified
-    if not start_date:
-        start_date = timezone.now().date() - timedelta(days=30)
-    if not end_date:
-        end_date = timezone.now().date()
-
-    # Base query filters
-    transaction_filters = {
+    # Base query for verified transactions in the date range
+    transaction_query = {
+        'status': 'verified',
         'date__gte': start_date,
         'date__lte': end_date,
-        'status': 'verified',
     }
 
     # Add association filter if provided
     if association:
-        transaction_filters['project__association'] = association
+        # Include both direct association and project association
+        transactions = Transaction.objects.filter(
+            Q(association=association) |
+            Q(project__association=association),
+            **transaction_query
+        ).distinct()
+    else:
+        transactions = Transaction.objects.filter(**transaction_query)
 
-    # Get verified transactions for the period
-    transactions = Transaction.objects.filter(**transaction_filters)
+    # Calculate total income and expenses
+    income_transactions = transactions.filter(transaction_type='income')
+    expense_transactions = transactions.filter(transaction_type='expense')
 
-    # Calculate totals
-    total_income = transactions.filter(transaction_type='income').aggregate(
-        total=Sum('amount')
-    )['total'] or Decimal('0')
-
-    total_expenses = transactions.filter(transaction_type='expense').aggregate(
-        total=Sum('amount')
-    )['total'] or Decimal('0')
-
+    total_income = income_transactions.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+    total_expenses = expense_transactions.aggregate(total=Sum('amount'))['total'] or Decimal('0')
     net_balance = total_income - total_expenses
 
-    # Calculate specific statistics
+    # Calculate statistics by category
+    income_by_category = {}
+    expenses_by_category = {}
+
+    # Income categories
+    categories = transactions.filter(transaction_type='income').values_list('category', flat=True).distinct()
+    for category in categories:
+        category_total = transactions.filter(
+            transaction_type='income',
+            category=category
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        income_by_category[category] = category_total
+
+    # Expense categories
+    categories = transactions.filter(transaction_type='expense').values_list('category', flat=True).distinct()
+    for category in categories:
+        category_total = transactions.filter(
+            transaction_type='expense',
+            category=category
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        expenses_by_category[category] = category_total
+
+    # Calculate total donations (a specific income category)
     total_donations = transactions.filter(
         transaction_type='income',
         category='donation'
     ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
+    # Calculate membership fees
+    total_membership_fees = transactions.filter(
+        transaction_type='income',
+        category='membership_fee'
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+    # Calculate total project expenses
     total_project_expenses = transactions.filter(
         transaction_type='expense',
         category='project_expense'
     ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
-    # Get income by category
-    income_by_category = {}
-    expense_by_category = {}
-
-    for transaction_type, category_dict in [
-        ('income', income_by_category),
-        ('expense', expense_by_category)
-    ]:
-        categories = transactions.filter(
-            transaction_type=transaction_type
-        ).values('category').annotate(
-            total=Sum('amount')
-        )
-
-        for category in categories:
-            # Get display name for the category
-            from .models import TRANSACTION_CATEGORIES
-            category_display = dict(TRANSACTION_CATEGORIES).get(category['category'], category['category'])
-            category_dict[category_display] = category['total']
-
     # Get project budget utilization
     budget_query = BudgetAllocation.objects.all()
     if association:
-        budget_query = budget_query.filter(project__association=association)
+        budget_query = budget_query.filter(
+            Q(association=association) |
+            Q(project__association=association)
+        ).distinct()
 
-    # Project budget utilization
-    budget_utilization = []
+    project_budget_utilization = []
     for budget in budget_query:
-        if hasattr(budget, 'project') and budget.project:
-            budget_utilization.append({
-                'project': budget.project.name,
-                'allocated': budget.allocated_amount,
-                'used': budget.used_amount,
-                'utilization': budget.utilization_percentage
-            })
+        # Calculate period expenses for this project
+        period_expenses = transactions.filter(
+            project=budget.project,
+            transaction_type='expense'
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+        project_budget_utilization.append({
+            'project': budget.project.name,
+            'allocated': float(budget.allocated_amount),
+            'used': float(budget.used_amount),
+            'remaining': float(budget.remaining_amount),
+            'utilization': float(budget.utilization_percentage),
+            'period_expenses': float(period_expenses)
+        })
 
     # Get recent transactions
-    recent_query = Transaction.objects.filter(
-        status='verified',
-        date__gte=start_date,
-        date__lte=end_date
-    ).order_by('-date')
+    recent_transactions = transactions.order_by('-date')[:10]
 
-    if association:
-        recent_query = recent_query.filter(project__association=association)
-
-    recent_transactions = recent_query[:5]
+    # Construct and return the statistics data structure
+    return {
+        'total_income': total_income,
+        'total_expenses': total_expenses,
+        'net_balance': net_balance,
+        'total_donations': total_donations,
+        'total_membership_fees': total_membership_fees,  # Add this to track membership fees
+        'total_project_expenses': total_project_expenses,
+        'income_by_category': income_by_category,
+        'expenses_by_category': expenses_by_category,
+        'project_budget_utilization': project_budget_utilization,
+        'recent_transactions': recent_transactions
+    }
 
     # Return complete statistics
     return {

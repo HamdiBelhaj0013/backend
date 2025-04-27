@@ -89,6 +89,10 @@ class TransactionVerificationSerializer(serializers.ModelSerializer):
         fields = ['status', 'verification_notes', 'budget_allocation']
 
     def update(self, instance, validated_data):
+        # Store the initial status before any changes
+        initial_status = instance.status
+
+        # Update the transaction with the validated data
         instance.status = validated_data.get('status', instance.status)
         instance.verification_notes = validated_data.get('verification_notes', instance.verification_notes)
 
@@ -96,20 +100,29 @@ class TransactionVerificationSerializer(serializers.ModelSerializer):
         if 'budget_allocation' in validated_data and not instance.budget_allocation:
             instance.budget_allocation = validated_data.get('budget_allocation')
 
-        # If the transaction is being verified, set verified_by and verification_date
-        if instance.status == 'verified':
+        # If the transaction is being verified for the first time, set verified_by and verification_date
+        if instance.status == 'verified' and initial_status != 'verified':
             instance.verified_by = self.context['request'].user
             instance.verification_date = timezone.now()
 
-            # If the transaction is linked to a budget allocation and is an expense, update the budget usage
+            print(f"Transaction {instance.id} verified by {instance.verified_by.email}")
+            print(f"  Initial status: {initial_status}, New status: {instance.status}")
+
+            # Note: budget allocation is handled by signals, so we don't need to manually
+            # update the budget here, which could lead to double-counting
+
+        # If the transaction is being rejected after being verified, need to update budget
+        if instance.status == 'rejected' and initial_status == 'verified':
+            # If the transaction has a budget allocation and is an expense, update the budget
             if instance.budget_allocation and instance.transaction_type == 'expense':
                 try:
                     budget = instance.budget_allocation
-                    budget.used_amount += instance.amount
+                    # Subtract the amount from used_amount since it was added when verified
+                    budget.used_amount = max(0, budget.used_amount - instance.amount)
                     budget.save()
+                    print(f"Transaction rejected: Removed {instance.amount} from budget {budget.id}")
                 except Exception as e:
-                    # Log the error but don't prevent verification
-                    print(f"Error updating budget: {e}")
+                    print(f"Error updating budget on rejection: {e}")
 
         instance.save()
         return instance

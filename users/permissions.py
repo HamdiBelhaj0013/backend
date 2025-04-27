@@ -2,19 +2,20 @@ from django.http import Http404
 from rest_framework.permissions import BasePermission
 
 
+# Add a custom permission type for user validation
 class PermissionType:
     VIEW = 'view'
     CREATE = 'create'
     EDIT = 'edit'
     DELETE = 'delete'
     FULL_ACCESS = 'full_access'
+    VALIDATE_USER = 'validate_user'  # New permission type
 
-
-# Permission mapping by role and resource
+# Updated permission mapping to include validate_user permission
 ROLE_PERMISSIONS = {
     'president': {
         'projects': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
-        'members': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'members': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE, PermissionType.VALIDATE_USER],  # Added validate_user
         'finance': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'tasks': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'meetings': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
@@ -23,16 +24,16 @@ ROLE_PERMISSIONS = {
     },
     'treasurer': {
         'projects': [PermissionType.VIEW],
-        'members': [PermissionType.VIEW],
+        'members': [PermissionType.VIEW, PermissionType.VALIDATE_USER],  # Added validate_user
         'finance': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'tasks': [PermissionType.VIEW],
         'meetings': [PermissionType.VIEW],
-        'reports': [PermissionType.VIEW, PermissionType.CREATE],  # Can only create/view financial reports
+        'reports': [PermissionType.VIEW, PermissionType.CREATE],
         'chatbot': [PermissionType.VIEW],
     },
     'secretary': {
         'projects': [PermissionType.VIEW],
-        'members': [PermissionType.VIEW],
+        'members': [PermissionType.VIEW, PermissionType.VALIDATE_USER],  # Added validate_user
         'finance': [PermissionType.VIEW],
         'tasks': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'meetings': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
@@ -45,12 +46,10 @@ ROLE_PERMISSIONS = {
         'finance': [PermissionType.VIEW],
         'tasks': [PermissionType.VIEW],
         'meetings': [PermissionType.VIEW],
-        'reports': [],  # No access to reports
+        'reports': [],
         'chatbot': [PermissionType.VIEW],
     }
 }
-
-
 def has_permission(user, resource_type, permission_type):
     """
     Check if a user has a specific permission for a resource
@@ -84,7 +83,18 @@ class MembersPermission(BasePermission):
     """Permission class specifically for checking member resource permissions"""
 
     def has_permission(self, request, view):
-        # Map HTTP methods to permission types
+        # Special handling for custom actions
+        if hasattr(view, 'action') and view.action == 'validate_user':
+            # For validate_user, only president, treasurer, secretary, and superusers can access
+            if request.user.is_superuser:
+                return True
+
+            if hasattr(request.user, 'role') and request.user.role:
+                return request.user.role.name in ['president', 'treasurer', 'secretary']
+
+            return False
+
+        # Default permission handling for standard methods
         method_mapping = {
             'GET': PermissionType.VIEW,
             'POST': PermissionType.CREATE,
