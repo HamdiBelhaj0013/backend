@@ -25,6 +25,9 @@ urlpatterns = [
 
     # Financial management URLs
     path('finances/', include('finances.urls')),
+
+    # Meetings management URLs
+    path('meetings/', include('meetings.urls')),
 ]
 
 if settings.DEBUG:

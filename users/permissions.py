@@ -11,11 +11,13 @@ class PermissionType:
     FULL_ACCESS = 'full_access'
     VALIDATE_USER = 'validate_user'  # New permission type
 
+
 # Updated permission mapping to include validate_user permission
 ROLE_PERMISSIONS = {
     'president': {
         'projects': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
-        'members': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE, PermissionType.VALIDATE_USER],  # Added validate_user
+        'members': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE,
+                    PermissionType.VALIDATE_USER],  # Added validate_user
         'finance': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'tasks': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'meetings': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
@@ -27,7 +29,7 @@ ROLE_PERMISSIONS = {
         'members': [PermissionType.VIEW, PermissionType.VALIDATE_USER],  # Added validate_user
         'finance': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'tasks': [PermissionType.VIEW],
-        'meetings': [PermissionType.VIEW],
+        'meetings': [PermissionType.VIEW, PermissionType.CREATE],
         'reports': [PermissionType.VIEW, PermissionType.CREATE],
         'chatbot': [PermissionType.VIEW],
     },
@@ -50,6 +52,8 @@ ROLE_PERMISSIONS = {
         'chatbot': [PermissionType.VIEW],
     }
 }
+
+
 def has_permission(user, resource_type, permission_type):
     """
     Check if a user has a specific permission for a resource
@@ -171,6 +175,22 @@ class MeetingsPermission(BasePermission):
     """Permission class specifically for checking meetings resource permissions"""
 
     def has_permission(self, request, view):
+        # Special handling for custom actions that might require specific permissions
+        if hasattr(view, 'action'):
+            # Actions that require edit permission
+            if view.action in ['add_attendees', 'add_agenda_items', 'mark_complete', 'create_recurring_instances']:
+                return has_permission(request.user, 'meetings', PermissionType.EDIT)
+
+            # Actions that might require admin/approver role
+            if view.action in ['approve_report']:
+                # Only president or secretary can approve reports
+                if request.user.is_superuser:
+                    return True
+                if hasattr(request.user, 'role') and request.user.role:
+                    return request.user.role.name in ['president', 'secretary']
+                return False
+
+        # Default permission handling based on HTTP method
         method_mapping = {
             'GET': PermissionType.VIEW,
             'POST': PermissionType.CREATE,

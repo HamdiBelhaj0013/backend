@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     'django_rest_passwordreset',
     'chatbot',  # Chatbot app
     'finances',  # Financial management app
+    'meetings',  # Meetings management app
     'django_filters',  # For filtering in DRF
 ]
 
@@ -112,6 +113,12 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 FINANCE_UPLOAD_DIR = os.path.join(MEDIA_ROOT, 'finance')
 os.makedirs(os.path.join(FINANCE_UPLOAD_DIR, 'reports'), exist_ok=True)
 os.makedirs(os.path.join(FINANCE_UPLOAD_DIR, 'transactions'), exist_ok=True)
+
+# Create meetings directories for document storage
+MEETINGS_UPLOAD_DIR = os.path.join(MEDIA_ROOT, 'meetings')
+os.makedirs(os.path.join(MEETINGS_UPLOAD_DIR, 'agenda'), exist_ok=True)
+os.makedirs(os.path.join(MEETINGS_UPLOAD_DIR, 'minutes'), exist_ok=True)
+os.makedirs(os.path.join(MEETINGS_UPLOAD_DIR, 'reports'), exist_ok=True)
 
 # Chatbot settings
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')

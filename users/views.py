@@ -656,8 +656,8 @@ class RegisterViewset(viewsets.ViewSet):
                     'association': association,
                     'full_name': president_name,
                     'role': president_role,
-                    'is_validated': True,  # Set to True by default
-                    'validation_date': current_time  # Set validation date
+                    'is_validated': True,
+                    'validation_date': current_time
                 }
             )
 

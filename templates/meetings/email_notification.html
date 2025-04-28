@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" lang="en">
+
+<head>
+    <title>{{ title }}</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            color: #333333;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background-color: #37474f;
+            color: #ffffff;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .content {
+            background-color: #ffffff;
+            padding: 20px;
+        }
+
+        .meeting-details {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+
+        .meeting-details table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .meeting-details table td {
+            padding: 8px;
+            vertical-align: top;
+        }
+
+        .meeting-details table td:first-child {
+            font-weight: bold;
+            width: 30%;
+        }
+
+        .button {
+            display: inline-block;
+            background-color: #37474f;
+            color: #ffffff;
+            text-decoration: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            margin-top: 15px;
+        }
+
+        .response-buttons {
+            text-align: center;
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f0f4ff;
+            border-radius: 8px;
+            border: 1px solid #d0d8ff;
+        }
+
+        .btn-attend {
+            display: inline-block;
+            background-color: #4CAF50;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 20px;
+            border-radius: 5px;
+            margin: 5px;
+            font-weight: bold;
+        }
+
+        .btn-decline {
+            display: inline-block;
+            background-color: #F44336;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 20px;
+            border-radius: 5px;
+            margin: 5px;
+            font-weight: bold;
+        }
+
+        .btn-tentative {
+            display: inline-block;
+            background-color: #FF9800;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 20px;
+            border-radius: 5px;
+            margin: 5px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ title }}</h1>
+        </div>
+
+        <div class="content">
+            <p>Hello {{ user.full_name }},</p>
+
+            <p>{{ message }}</p>
+
+            <div class="meeting-details">
+                <table>
+                    <tr>
+                        <td>Meeting:</td>
+                        <td>{{ meeting.title }}</td>
+                    </tr>
+                    <tr>
+                        <td>Type:</td>
+                        <td>{{ meeting.get_meeting_type_display }}</td>
+                    </tr>
+                    <tr>
+                        <td>Date:</td>
+                        <td>{{ meeting_date }}</td>
+                    </tr>
+                    <tr>
+                        <td>Time:</td>
+                        <td>{{ meeting_time }}</td>
+                    </tr>
+                    <tr>
+                        <td>Location:</td>
+                        <td>{{ meeting_location }}</td>
+                    </tr>
+                    {% if meeting_link %}
+                    <tr>
+                        <td>Meeting Link:</td>
+                        <td><a href="{{ meeting_link }}">{{ meeting_link }}</a></td>
+                    </tr>
+                    {% endif %}
+                    <tr>
+                        <td>Status:</td>
+                        <td>{{ meeting.get_status_display }}</td>
+                    </tr>
+                </table>
+            </div>
+
+            {% if meeting.agenda %}
+            <h3>Agenda</h3>
+            <div style="white-space: pre-line;">{{ meeting.agenda }}</div>
+            {% endif %}
+
+            <!-- Response buttons for attendance - showing for all notification types -->
+            <div class="response-buttons">
+                <p><strong>Will you attend this meeting?</strong></p>
+                {% if attendee %}
+                    <a href="http://localhost:5173/meetings/response/{{ attendee.id }}/mtg-{{ attendee.id }}-{{ meeting.id }}/yes" class="btn-attend">Yes, I'll Attend</a>
+                    <a href="http://localhost:5173/meetings/response/{{ attendee.id }}/mtg-{{ attendee.id }}-{{ meeting.id }}/no" class="btn-decline">No, I Can't Attend</a>
+                    <a href="http://localhost:5173/meetings/response/{{ attendee.id }}/mtg-{{ attendee.id }}-{{ meeting.id }}/maybe" class="btn-tentative">Request Excuse</a>
+                {% else %}
+                    <p>Unable to display response options - attendee information not available.</p>
+                {% endif %}
+            </div>
+
+            <a href="http://localhost:5173/meetings/{{ meeting.id }}" class="button">View Meeting Details</a>
+        </div>
+
+        <div class="footer">
+            <p>This is an automated message from MyOrg. Please do not reply to this email.</p>
+            <p>If you have any questions, please contact your association administrator.</p>
+        </div>
+    </div>
+</body>
+
+</html>

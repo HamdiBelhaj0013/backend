@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{{ report.title }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            line-height: 1.5;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo {
+            max-width: 150px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            font-size: 22px;
+            margin-bottom: 5px;
+        }
+        h2 {
+            font-size: 18px;
+            margin-top: 25px;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 5px;
+        }
+        .meeting-details {
+            margin-bottom: 30px;
+            border: 1px solid #ddd;
+            padding: 15px;
+            background-color: #f9f9f9;
+        }
+        .meeting-details table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .meeting-details td {
+            padding: 5px;
+            vertical-align: top;
+        }
+        .meeting-details td:first-child {
+            font-weight: bold;
+            width: 30%;
+        }
+        .section {
+            margin-bottom: 25px;
+        }
+        .agenda-table, .attendance-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            margin-bottom: 20px;
+        }
+        .agenda-table th, .attendance-table th {
+            background-color: #f2f2f2;
+            text-align: left;
+            padding: 8px;
+            border: 1px solid #ddd;
+        }
+        .agenda-table td, .attendance-table td {
+            padding: 8px;
+            border: 1px solid #ddd;
+        }
+        .footer {
+            margin-top: 40px;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+        }
+        .minutes {
+            white-space: pre-line;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <img src="data:image/png;base64,{{ logo_base64 }}" class="logo" alt="Association Logo">
+        <h1>{{ report.title }}</h1>
+        <p>{{ meeting.association.name }}</p>
+    </div>
+
+    <div class="meeting-details">
+        <table>
+            <tr>
+                <td>Meeting:</td>
+                <td>{{ meeting.title }}</td>
+            </tr>
+            <tr>
+                <td>Type:</td>
+                <td>{{ meeting.get_meeting_type_display }}</td>
+            </tr>
+            <tr>
+                <td>Date:</td>
+                <td>{{ meeting.start_date|date:"l, F d, Y" }}</td>
+            </tr>
+            <tr>
+                <td>Time:</td>
+                <td>{{ meeting.start_date|date:"g:i A" }} - {{ meeting.end_date|date:"g:i A" }}</td>
+            </tr>
+            <tr>
+                <td>Location:</td>
+                <td>{{ meeting.location|default:"Virtual Meeting" }}</td>
+            </tr>
+            {% if meeting.is_virtual and meeting.meeting_link %}
+            <tr>
+                <td>Meeting Link:</td>
+                <td>{{ meeting.meeting_link }}</td>
+            </tr>
+            {% endif %}
+        </table>
+    </div>
+
+    {% if report.summary %}
+    <div class="section">
+        <h2>Summary</h2>
+        <p>{{ report.summary }}</p>
+    </div>
+    {% endif %}
+
+    {% if include_attendance and attendees %}
+    <div class="section">
+        <h2>Attendance</h2>
+
+        <p>
+            <strong>Total Members:</strong> {{ attendees.count }}<br>
+            <strong>Present:</strong> {{ present_count }}<br>
+            <strong>Absent:</strong> {{ absent_count }}<br>
+            <strong>Excused:</strong> {{ excused_count }}
+        </p>
+
+        <table class="attendance-table">
+            <thead>
+                <tr>
+                    <th>Member</th>
+                    <th>Status</th>
+                    <th>Role</th>
+                    <th>Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for attendee in attendees %}
+                <tr>
+                    <td>{{ attendee.member.name }}</td>
+                    <td>{{ attendee.get_status_display }}</td>
+                    <td>{{ attendee.special_role|default:"-" }}</td>
+                    <td>{{ attendee.notes|default:"-" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {% if include_agenda_items and agenda_items %}
+    <div class="section">
+        <h2>Agenda</h2>
+
+        <table class="agenda-table">
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Presenter</th>
+                    <th>Duration</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in agenda_items %}
+                <tr>
+                    <td>
+                        <strong>{{ item.title }}</strong>
+                        {% if item.description %}
+                        <p>{{ item.description }}</p>
+                        {% endif %}
+                    </td>
+                    <td>{{ item.presenter.name|default:"N/A" }}</td>
+                    <td>{{ item.duration_minutes }} min</td>
+                    <td>{{ item.is_completed|yesno:"Completed,Pending" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {% if include_minutes and meeting.minutes %}
+    <div class="section">
+        <h2>Minutes</h2>
+        <div class="minutes">{{ meeting.minutes|linebreaks }}</div>
+    </div>
+    {% endif %}
+
+    <div class="section">
+        <h2>Decisions and Action Items</h2>
+        <p>The following decisions were made during the meeting:</p>
+        <ul>
+            {% for decision in decisions %}
+            <li>{{ decision }}</li>
+            {% empty %}
+            <li>No formal decisions were recorded.</li>
+            {% endfor %}
+        </ul>
+
+        <p>Action items assigned:</p>
+        <ul>
+            {% for action in action_items %}
+            <li>{{ action.description }} - Assigned to: {{ action.assignee }} (Due: {{ action.due_date|date:"M d, Y" }})</li>
+            {% empty %}
+            <li>No action items were assigned.</li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>Next Meeting</h2>
+        {% if next_meeting %}
+        <p>The next meeting is scheduled for {{ next_meeting.start_date|date:"l, F d, Y" }} at {{ next_meeting.start_date|date:"g:i A" }}.</p>
+        {% else %}
+        <p>The next meeting date has not been scheduled yet.</p>
+        {% endif %}
+    </div>
+
+    <div class="footer">
+        <p>
+            Report generated on {{ generated_date|date:"F d, Y" }}<br>
+            {% if report.created_by %}
+            Generated by: {{ report.created_by.full_name|default:report.created_by.email }}
+            {% endif %}
+        </p>
+        {% if report.is_approved %}
+        <p>
+            <strong>APPROVED</strong><br>
+            Approved by: {{ report.approved_by.full_name|default:report.approved_by.email }}<br>
+            Approval date: {{ report.approval_date|date:"F d, Y" }}
+        </p>
+        {% endif %}
+    </div>
+</body>
+</html>
