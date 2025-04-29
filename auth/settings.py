@@ -34,10 +34,12 @@ INSTALLED_APPS = [
     'api',
     'knox', 
     'django_rest_passwordreset',
-    'chatbot',  # Chatbot app
-    'finances',  # Financial management app
-    'meetings',  # Meetings management app
-    'django_filters',  # For filtering in DRF
+    'chatbot',
+    'finances',
+    'meetings',
+    'django_filters',
+    'notifications',
+
 ]
 
 MIDDLEWARE = [

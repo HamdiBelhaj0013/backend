@@ -12,6 +12,7 @@ router.register('budget-allocations', BudgetAllocationViewSet, basename='budget-
 router.register('financial-reports', FinancialReportViewSet, basename='financial-report')
 router.register('dashboard', FinancialDashboardViewSet, basename='financial-dashboard')
 
+
 urlpatterns = [
     path('', include(router.urls)),
 ]

@@ -28,6 +28,7 @@ urlpatterns = [
 
     # Meetings management URLs
     path('meetings/', include('meetings.urls')),
+    path('notifications/', include('notifications.urls')),
 ]
 
 if settings.DEBUG:

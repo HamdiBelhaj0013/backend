@@ -1,29 +1,26 @@
 from rest_framework import serializers
 from .models import Donor, Transaction, BudgetAllocation, FinancialReport
 from api.serializers import ProjectSerializer
-from users.serializers import UserProfileSerializer
 from django.utils import timezone
-
-# Add this to your existing serializers.py file
-from rest_framework import serializers
 from .models import Donor
-
-# Update your DonorSerializer.py file with this code
 from rest_framework import serializers
-from .models import Donor
+from users.serializers import UserProfileSerializer
+from django.apps import apps
 
 
 class DonorSerializer(serializers.ModelSerializer):
-    # Using SerializerMethodField for read-only properties
+
     total_donations = serializers.SerializerMethodField()
     created_by_details = UserProfileSerializer(source='created_by', read_only=True)
+    member_details = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Donor
         fields = [
             'id', 'name', 'email', 'phone', 'address',
             'tax_id', 'notes', 'is_anonymous',
-            'created_at', 'updated_at', 'total_donations',
+            'is_member', 'is_internal', 'member_id', 'member_details',
+            'is_active', 'created_at', 'updated_at', 'total_donations',
             'created_by', 'created_by_details', 'association'
         ]
         read_only_fields = [
@@ -35,6 +32,60 @@ class DonorSerializer(serializers.ModelSerializer):
         # This calls the total_donations property on the model
         return obj.total_donations
 
+    def get_member_details(self, obj):
+        """Return member details if this donor is a member"""
+        if not obj.is_member or not obj.member_id:
+            return None
+
+        # Get the Member model dynamically to avoid circular imports
+        Member = apps.get_model('api', 'Member')
+
+        try:
+            member = Member.objects.get(id=obj.member_id)
+            return {
+                'id': member.id,
+                'name': member.name if hasattr(member, 'name') else member.full_name if hasattr(member,
+                                                                                                'full_name') else member.username,
+                'email': member.email if hasattr(member, 'email') else None,
+                'role': member.role if hasattr(member, 'role') else None
+            }
+        except Member.DoesNotExist:
+            return None
+
+    def validate(self, data):
+        """
+        Validate the donor data.
+        - If is_member is True, ensure is_internal is False
+        - If is_internal is True, ensure is_member is False
+        - If is_member is True, require member_id
+        """
+        is_member = data.get('is_member', False)
+        is_internal = data.get('is_internal', False)
+        member_id = data.get('member_id')
+
+        if is_member and is_internal:
+            raise serializers.ValidationError("A donor cannot be both a member and internal at the same time")
+
+        if is_member and not member_id:
+            raise serializers.ValidationError("A member donor must have a member_id")
+
+        if not is_member and member_id:
+            data['member_id'] = None  # Clear member_id if not a member
+
+        # If this is a member donor, we can set name based on member details
+        if is_member and member_id and not data.get('name'):
+            Member = apps.get_model('api', 'Member')
+            try:
+                member = Member.objects.get(id=member_id)
+                data['name'] = member.name if hasattr(member, 'name') else member.full_name if hasattr(member,
+                                                                                                       'full_name') else member.username
+                # Also set email if available and not already set
+                if not data.get('email') and hasattr(member, 'email') and member.email:
+                    data['email'] = member.email
+            except Member.DoesNotExist:
+                pass
+
+        return data
 
 class BudgetAllocationSerializer(serializers.ModelSerializer):
     project_details = ProjectSerializer(source='project', read_only=True)
