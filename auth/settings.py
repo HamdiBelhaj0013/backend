@@ -39,7 +39,6 @@ INSTALLED_APPS = [
     'meetings',
     'django_filters',
     'notifications',
-
 ]
 
 MIDDLEWARE = [

@@ -16,15 +16,18 @@ class IsOwnerOrAdmin(permissions.BasePermission):
             return True
 
         # Admin users (president, treasurer, admins) can access any notification
-        if request.user.role in ['admin', 'treasurer', 'president']:
+        if hasattr(request.user, 'role') and request.user.role and request.user.role.name in ['admin', 'treasurer',
+                                                                                              'president']:
             return True
 
         # Users can only access notifications directed to them or their role
+        user_role = request.user.role.name if hasattr(request.user, 'role') and request.user.role else None
+
         return (
                 (obj.recipient is None) or
                 (obj.recipient == request.user) or
                 (obj.recipient_role is None) or
-                (obj.recipient_role == request.user.role)
+                (user_role and obj.recipient_role == user_role)
         )
 
 
@@ -42,7 +45,8 @@ class CanManageNotifications(permissions.BasePermission):
         if request.method in ['POST', 'PUT', 'PATCH', 'DELETE']:
             return (
                     request.user.is_superuser or
-                    request.user.role in ['admin', 'treasurer', 'president']
+                    (hasattr(request.user, 'role') and request.user.role and
+                     request.user.role.name in ['admin', 'treasurer', 'president'])
             )
 
         # Anyone authenticated can retrieve notifications
@@ -54,7 +58,8 @@ class CanManageNotifications(permissions.BasePermission):
             return True
 
         # Admin users can manage all notifications
-        if request.user.role in ['admin', 'treasurer', 'president']:
+        if hasattr(request.user, 'role') and request.user.role and request.user.role.name in ['admin', 'treasurer',
+                                                                                              'president']:
             return True
 
         # For letters, users can only manage ones they sent

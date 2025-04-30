@@ -13,6 +13,7 @@ class PermissionType:
 
 
 # Updated permission mapping to include validate_user permission
+# Updated permission mapping to include validate_user permission
 ROLE_PERMISSIONS = {
     'president': {
         'projects': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
@@ -23,6 +24,7 @@ ROLE_PERMISSIONS = {
         'meetings': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'reports': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'chatbot': [PermissionType.VIEW],
+        'notifications': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
     },
     'treasurer': {
         'projects': [PermissionType.VIEW],
@@ -32,6 +34,7 @@ ROLE_PERMISSIONS = {
         'meetings': [PermissionType.VIEW, PermissionType.CREATE],
         'reports': [PermissionType.VIEW, PermissionType.CREATE],
         'chatbot': [PermissionType.VIEW],
+        'notifications': [PermissionType.VIEW, PermissionType.CREATE],
     },
     'secretary': {
         'projects': [PermissionType.VIEW],
@@ -41,6 +44,7 @@ ROLE_PERMISSIONS = {
         'meetings': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'reports': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'chatbot': [PermissionType.VIEW],
+        'notifications': [PermissionType.VIEW],
     },
     'member': {
         'projects': [PermissionType.VIEW],
@@ -50,9 +54,21 @@ ROLE_PERMISSIONS = {
         'meetings': [PermissionType.VIEW],
         'reports': [],
         'chatbot': [PermissionType.VIEW],
+        'notifications': [PermissionType.VIEW],
+    },
+    # Map admin role (from backend) to match president permissions
+    'admin': {
+        'projects': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'members': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE,
+                    PermissionType.VALIDATE_USER],
+        'finance': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'tasks': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'meetings': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'reports': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'chatbot': [PermissionType.VIEW],
+        'notifications': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
     }
 }
-
 
 def has_permission(user, resource_type, permission_type):
     """
@@ -242,3 +258,35 @@ class ChatbotPermission(BasePermission):
             return False
 
         return has_permission(request.user, 'chatbot', permission_type)
+
+
+class NotificationPermission(BasePermission):
+    """Permission class specifically for checking notification resource permissions"""
+
+    def has_permission(self, request, view):
+        # All authenticated users can view notifications
+        if request.method == 'GET':
+            return request.user and request.user.is_authenticated
+
+        # For other operations, check specific permissions
+        method_mapping = {
+            'POST': PermissionType.CREATE,
+            'PUT': PermissionType.EDIT,
+            'PATCH': PermissionType.EDIT,
+            'DELETE': PermissionType.DELETE,
+        }
+
+        permission_type = method_mapping.get(request.method)
+        if permission_type is None:
+            return False
+
+        # Handle role mapping between 'admin' and 'president'
+        if hasattr(request.user, 'role'):
+            # Map 'admin' backend role to 'president' frontend role for permission checking
+            role_name = request.user.role.name
+            if role_name == 'admin':
+                return has_permission(request.user, 'notifications', permission_type) or has_permission(request.user,
+                                                                                                        'admin',
+                                                                                                        permission_type)
+
+        return has_permission(request.user, 'notifications', permission_type)

@@ -248,33 +248,81 @@ def generate_monthly_summary():
     return f"Generated monthly summary for {month_name}"
 
 
-# Schedule for Celery
-# If using Celery, add these scheduled tasks to your Celery beat schedule:
-"""
-CELERY_BEAT_SCHEDULE = {
-    'check-monthly-meetings': {
-        'task': 'notifications.tasks.check_monthly_meetings',
-        'schedule': crontab(hour=8),  # Run daily at 8 AM
-    },
-    'check-pending-reports': {
-        'task': 'notifications.tasks.check_pending_reports',
-        'schedule': crontab(hour=9),  # Run daily at 9 AM
-    },
-    'check-upcoming-meetings': {
-        'task': 'notifications.tasks.check_upcoming_meetings',
-        'schedule': crontab(hour=10),  # Run daily at 10 AM
-    },
-    'check-budget-thresholds': {
-        'task': 'notifications.tasks.check_budget_thresholds',
-        'schedule': crontab(day_of_week='monday', hour=8),  # Run weekly on Monday at 8 AM
-    },
-    'check-pending-official-letters': {
-        'task': 'notifications.tasks.check_pending_official_letters',
-        'schedule': crontab(day_of_week='monday,thursday', hour=9),  # Run twice a week
-    },
-    'generate-monthly-summary': {
-        'task': 'notifications.tasks.generate_monthly_summary',
-        'schedule': crontab(day_of_month='1', hour=7),  # Run on 1st of every month at 7 AM
-    },
-}
-"""
+# tasks.py - Django Celery Tasks for notifications
+from celery import shared_task
+from django.utils import timezone
+from datetime import datetime
+
+from notifications.services import NotificationService
+
+
+@shared_task
+def check_monthly_meeting_status():
+    """
+    Check if meetings are scheduled for the current and upcoming month
+    """
+    result = NotificationService.check_monthly_meeting_status()
+    return f"Checked monthly meeting status for {result['current_month']}"
+
+
+@shared_task
+def check_expiring_letter_deadlines():
+    """
+    Check for official letters that are approaching their deadlines
+    """
+    expiring_count = NotificationService.check_expiring_letter_deadlines()
+    return f"Found {expiring_count} official letters with approaching deadlines"
+
+
+@shared_task
+def send_letter_deadline_reminder(notification_id, urgent=False):
+    """
+    Send a reminder about a letter deadline
+    """
+    reminder = NotificationService.send_letter_deadline_reminder(notification_id, urgent)
+    notification_type = "urgent" if urgent else "standard"
+    return f"Sent {notification_type} reminder for letter notification {notification_id}"
+
+
+# Configure periodic tasks
+def setup_periodic_tasks(sender, **kwargs):
+    # Check for monthly meetings every Monday morning
+    sender.add_periodic_task(
+        crontab(day_of_week='mon', hour=9, minute=0),
+        check_monthly_meeting_status.s(),
+        name='check_monthly_meeting_status'
+    )
+
+    # Check for expiring letter deadlines daily
+    sender.add_periodic_task(
+        crontab(hour=10, minute=0),
+        check_expiring_letter_deadlines.s(),
+        name='check_expiring_letter_deadlines'
+    )
+
+
+# Function to schedule reminders for official letters when created
+def schedule_letter_reminders(notification):
+    """
+    Schedule reminders for official letter deadlines
+    """
+    if notification.requires_official_letter:
+        # Schedule reminder 15 days before deadline
+        reminder_date = notification.action_deadline - timezone.timedelta(days=15)
+
+        # Only schedule if reminder date is in the future
+        if reminder_date > timezone.now():
+            send_letter_deadline_reminder.apply_async(
+                args=[notification.id, False],
+                eta=reminder_date
+            )
+
+        # Schedule urgent reminder 7 days before deadline
+        urgent_reminder_date = notification.action_deadline - timezone.timedelta(days=7)
+
+        # Only schedule if reminder date is in the future
+        if urgent_reminder_date > timezone.now():
+            send_letter_deadline_reminder.apply_async(
+                args=[notification.id, True],
+                eta=urgent_reminder_date
+            )
