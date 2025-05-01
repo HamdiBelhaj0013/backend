@@ -23,7 +23,7 @@ class MeetingAttendeeSerializer(serializers.ModelSerializer):
         model = MeetingAttendee
         fields = [
             'id', 'meeting', 'member', 'member_details', 'status',
-            'notes', 'special_role', 'created_at', 'updated_at'
+            'attendance_mode', 'notes', 'special_role', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
 

@@ -109,6 +109,8 @@ class BudgetAllocationSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
+# In serializers.py, update the TransactionSerializer class:
+
 class TransactionSerializer(serializers.ModelSerializer):
     project_details = ProjectSerializer(source='project', read_only=True)
     donor_details = DonorSerializer(source='donor', read_only=True)
@@ -124,7 +126,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             'budget_allocation', 'budget_allocation_details',
             'reference_number', 'status', 'verified_by', 'verified_by_details',
             'verification_date', 'verification_notes', 'created_by', 'created_by_details',
-            'created_at', 'updated_at'
+            'created_at', 'updated_at', 'is_project_wide'  # Added is_project_wide here
         ]
         read_only_fields = ['verified_by', 'verification_date']
 
@@ -137,7 +139,7 @@ class TransactionSerializer(serializers.ModelSerializer):
 class TransactionVerificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Transaction
-        fields = ['status', 'verification_notes', 'budget_allocation']
+        fields = ['status', 'verification_notes', 'budget_allocation', 'is_project_wide']
 
     def update(self, instance, validated_data):
         # Store the initial status before any changes

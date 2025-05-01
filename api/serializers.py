@@ -8,32 +8,59 @@ class ProjectSerializer(serializers.ModelSerializer):
         fields = ('id', 'name', 'start_date', 'end_date', 'description', 'budget', 'status')
 
 
-from .models import *
-from rest_framework import serializers
-
-
 class MemberSerializer(serializers.ModelSerializer):
+    association = serializers.PrimaryKeyRelatedField(
+        queryset=AssociationAccount.objects.all(),
+        required=False
+    )
+    association_name = serializers.SerializerMethodField()
+
     class Meta:
         model = Member
-        fields = '__all__'
-        # Make association field read-only to prevent the validation error
-        read_only_fields = ('association',)
+        fields = [
+            'id', 'name', 'cin', 'email', 'birth_date', 'address',
+            'nationality', 'job', 'joining_date', 'role',
+            'association', 'association_name', 'needs_profile_completion'
+        ]
+
+    def get_association_name(self, obj):
+        return obj.association.name if obj.association else None
 
     def validate(self, data):
-        """
-        Custom validation for the Member model
-        """
-        # Log the data being validated for debugging
-        print("Validating Member data:", data)
+        """Validate that all required fields have proper values"""
+        # If this is an update operation (existing instance)
+        if self.instance:
+            # Combine existing values with updates
+            name = data.get('name', self.instance.name)
+            cin = data.get('cin', self.instance.cin)
+            birth_date = data.get('birth_date', self.instance.birth_date)
+            address = data.get('address', self.instance.address)
+            nationality = data.get('nationality', self.instance.nationality)
+            job = data.get('job', self.instance.job)
 
-        # Make sure required fields are present
-        required_fields = ['name', 'address', 'email', 'nationality', 'birth_date', 'job', 'joining_date', 'role']
-        for field in required_fields:
-            if field not in data:
-                raise serializers.ValidationError(f"{field} is required")
+            # Check if any field is missing or has a default placeholder value
+            needs_completion = (
+                    not name or
+                    not cin or
+                    not birth_date or
+                    not address or address == "Please update your address" or
+                    not nationality or nationality == "Please update your nationality" or
+                    not job or job == "Please update your job"
+            )
 
-        # Ensure needs_profile_completion has a value if not provided
-        if 'needs_profile_completion' not in data:
-            data['needs_profile_completion'] = False
+            # Only update the needs_profile_completion flag if all fields are properly filled
+            data['needs_profile_completion'] = needs_completion
+
+            # Log what's happening for debugging
+            print(f"Member update validation: needs_profile_completion = {needs_completion}")
+            if needs_completion:
+                print(f"Fields still needed: " +
+                      (f"name ('{name}')" if not name else "") +
+                      (f"cin ('{cin}')" if not cin else "") +
+                      (f"birth_date ('{birth_date}')" if not birth_date else "") +
+                      (f"address ('{address}')" if not address or address == "Please update your address" else "") +
+                      (
+                          f"nationality ('{nationality}')" if not nationality or nationality == "Please update your nationality" else "") +
+                      (f"job ('{job}')" if not job or job == "Please update your job" else ""))
 
         return data

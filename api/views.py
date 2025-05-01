@@ -209,11 +209,12 @@ class MemberViewset(viewsets.ViewSet):
 
         # If user has an association, add it to the request data
         if request.user.association:
-            # Don't modify the data dictionary directly
-            serializer = self.serializer_class(data=data)
+            # Create serializer with context and explicitly provide association ID in data
+            data['association'] = request.user.association.id
+            serializer = self.serializer_class(data=data, context={'request': request})
+
             if serializer.is_valid():
-                serializer.save(
-                    association=request.user.association,
+                member = serializer.save(
                     needs_profile_completion=data.get('needs_profile_completion', False)
                 )
                 return Response(serializer.data)
@@ -236,12 +237,14 @@ class MemberViewset(viewsets.ViewSet):
 
         print("Update Member Data:", request.data)
         # Use partial=True to allow partial updates without requiring all fields
-        serializer = self.serializer_class(member, data=request.data, partial=True)
+        data = request.data.copy()
+        data['association'] = member.association.id  # Ensure association ID is in data
+
+        serializer = self.serializer_class(member, data=data, partial=True, context={'request': request})
 
         if serializer.is_valid():
-            # Always preserve the existing association
+            # Save with needs_profile_completion from request or keep existing value
             serializer.save(
-                association=member.association,
                 needs_profile_completion=request.data.get('needs_profile_completion', member.needs_profile_completion)
             )
             return Response(serializer.data)

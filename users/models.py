@@ -5,7 +5,7 @@ from django.template.loader import render_to_string
 from django.core.mail import EmailMultiAlternatives
 from django.utils.html import strip_tags
 from django_rest_passwordreset.signals import reset_password_token_created
-
+from django.core.validators import RegexValidator
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, association=None, full_name=None, **extra_fields):
@@ -86,13 +86,25 @@ class Role(models.Model):
         return self.get_name_display()
 
 
-# Custom User Model
-# models.py - Add is_validated field to CustomUser model
+cin_validator = RegexValidator(
+    regex=r'^\d{8}$',
+    message='CIN doit contenir exactement 8 chiffres',
+    code='invalid_cin'
+)
 
 class CustomUser(AbstractUser):
     email = models.EmailField(max_length=200, unique=True)
+    cin = models.CharField(
+        max_length=8,
+        validators=[cin_validator],
+        null=True,
+        unique=True,
+        verbose_name="CIN",
+        help_text="Carte d'Identité Nationale (8 chiffres)"
+    )
     username = models.CharField(max_length=200, null=True, blank=True)
     full_name = models.CharField(max_length=255, blank=True, null=True)
+    birth_date = models.DateField(null=True, blank=True, verbose_name="Date de naissance")
     association = models.ForeignKey(
         AssociationAccount,
         on_delete=models.CASCADE,

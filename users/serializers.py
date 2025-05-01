@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 from .models import CustomUser, AssociationAccount, Role
 from .permissions import ROLE_PERMISSIONS
+from django.core.validators import RegexValidator
 
 
 User = get_user_model()
@@ -64,6 +65,8 @@ class UserProfileSerializer(serializers.ModelSerializer):
         required=False
     )
     permissions = serializers.SerializerMethodField()
+    # Add birth_date field from related Member model
+    birth_date = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomUser
@@ -76,7 +79,9 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'association',
             'role',
             'role_id',
-            'permissions'
+            'permissions',
+            'cin',  # Include CIN field
+            'birth_date'  # Include the birth_date field
         ]
 
     def get_permissions(self, obj):
@@ -85,6 +90,12 @@ class UserProfileSerializer(serializers.ModelSerializer):
             return {}
 
         return ROLE_PERMISSIONS.get(obj.role.name, {})
+
+    def get_birth_date(self, obj):
+        """Get the birth_date directly from CustomUser model"""
+        if obj.birth_date:
+            return obj.birth_date.isoformat()
+        return None
 
 
 # Login Serializer
@@ -108,7 +119,14 @@ class LoginSerializer(serializers.Serializer):
 
         return ret
 
+cin_validator = RegexValidator(
+    regex=r'^\d{8}$',
+    message='CIN doit contenir exactement 8 chiffres',
+    code='invalid_cin'
+)
 
+
+# User Registration Serializer
 # User Registration Serializer
 class RegisterSerializer(serializers.ModelSerializer):
     association_id = serializers.PrimaryKeyRelatedField(
@@ -119,10 +137,28 @@ class RegisterSerializer(serializers.ModelSerializer):
     association = serializers.SerializerMethodField()
     full_name = serializers.CharField(required=False, allow_blank=True)
 
+    # Add validation for CIN and birth_date, but make them write_only
+    cin = serializers.CharField(
+        required=True,
+        validators=[cin_validator],
+        error_messages={'required': 'Le CIN est requis'}
+    )
+    birth_date = serializers.DateField(
+        required=True,
+        error_messages={'required': 'La date de naissance est requise'},
+        write_only=True  # Add this to prevent it from being included in the response
+    )
+
     class Meta:
         model = User
-        fields = ('id', 'email', 'password', 'full_name', 'association_id', 'association', 'is_validated')
-        extra_kwargs = {'password': {'write_only': True}, 'is_validated': {'read_only': True}}
+        fields = (
+            'id', 'email', 'password', 'full_name', 'cin', 'birth_date',
+            'association_id', 'association', 'is_validated'
+        )
+        extra_kwargs = {
+            'password': {'write_only': True},
+            'is_validated': {'read_only': True}
+        }
 
     def get_association(self, obj):
         """ Return association details in response """
@@ -130,18 +166,24 @@ class RegisterSerializer(serializers.ModelSerializer):
             return {"id": obj.association.id, "name": obj.association.name}
         return None
 
+    # serializers.py - Update RegisterSerializer.create
     def create(self, validated_data):
         password = validated_data.pop('password')
-        # Set role to 'member' (role_id=4) by default
+        birth_date = validated_data.pop('birth_date', None)  # Extract birth_date
+
+        # Set role to 'member' by default
         member_role = Role.objects.get_or_create(name='member')[0]
 
+        # Create the user with CIN and birth_date
         user = User.objects.create_user(
             **validated_data,
+            birth_date=birth_date,  # Add birth_date
             role=member_role,
             is_validated=False  # New users start as unvalidated
         )
         user.set_password(password)
         user.save()
+
         return user
 
 

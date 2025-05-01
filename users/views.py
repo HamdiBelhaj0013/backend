@@ -12,8 +12,8 @@ from rest_framework.response import Response
 from .models import AssociationAccount, Role, CustomUser
 from .serializers import AssociationAccountSerializer, AssociationVerificationSerializer
 from .document_extractor_utils import verify_association_document
-
-
+import re
+from datetime import datetime, date
 class AssociationAccountViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing association accounts with improved access controls
@@ -583,8 +583,6 @@ class AssociationRegisterViewset(viewsets.ViewSet):
         return Response(serializer.errors, status=400)
 
 
-
-
 class RegisterViewset(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
     serializer_class = RegisterSerializer
@@ -599,11 +597,46 @@ class RegisterViewset(viewsets.ViewSet):
         # Fetch the association instance
         association = get_object_or_404(AssociationAccount, id=association_id)
 
+        # Validate CIN format
+        cin = data.get('cin')
+        if not cin or not re.match(r'^\d{8}$', cin):
+            return Response({"error": "Le CIN doit contenir exactement 8 chiffres"}, status=400)
+
+        # Validate birth_date format and value
+        birth_date = data.get('birth_date')
+        if not birth_date:
+            return Response({"error": "La date de naissance est requise"}, status=400)
+
+        try:
+            # Check if birth_date is a valid date
+            birth_date_obj = datetime.strptime(birth_date, '%Y-%m-%d').date()
+
+            # Check if user is at least 18 years old
+            today = date.today()
+            age = today.year - birth_date_obj.year - (
+                    (today.month, today.day) < (birth_date_obj.month, birth_date_obj.day))
+            if age < 18:
+                return Response({"error": "Vous devez avoir au moins 18 ans pour vous inscrire"}, status=400)
+        except ValueError:
+            return Response({"error": "Format de date invalide. Utilisez le format YYYY-MM-DD"}, status=400)
+
+        # Create serializer with full data
         serializer = self.serializer_class(data=data)
         if serializer.is_valid():
-            # Include full_name in the saved user data if provided
-            full_name = data.get("full_name", "")
-            user = serializer.save(association=association, full_name=full_name)
+            # Include full_name and cin in the saved user data (but not birth_date as it's not a field in the User model)
+            user = serializer.save(
+                association=association,
+                full_name=data.get("full_name", ""),
+                cin=cin
+            )
+
+            # Store birth_date in the user's session or as a custom attribute
+            # This can be retrieved later when validating the user
+            print(f"User registered with CIN: {cin} and birth_date: {birth_date}")
+
+            # Note: We do NOT create a Member record here anymore
+            # The Member record will be created only after validation
+
             return Response(serializer.data, status=201)
 
         return Response(serializer.errors, status=400)
@@ -656,8 +689,8 @@ class RegisterViewset(viewsets.ViewSet):
                     'association': association,
                     'full_name': president_name,
                     'role': president_role,
-                    'is_validated': True,
-                    'validation_date': current_time
+                    'is_validated': True,  # Set to True by default
+                    'validation_date': current_time  # Set validation date
                 }
             )
 
@@ -677,33 +710,42 @@ class RegisterViewset(viewsets.ViewSet):
 
             # Create or update corresponding Member object
             try:
-                member, member_created = Member.objects.get_or_create(
-                    email=association.president_email,
-                    defaults={
-                        'name': president_name,
-                        'address': "Please update your address",
-                        'nationality': "Please update your nationality",
-                        'birth_date': default_birth_date,
-                        'job': "Association President",
-                        'joining_date': today,
-                        'role': "Président",
-                        'association': association
-                    }
-                )
-
-                # Add a flag to indicate this member needs profile completion
-                if member_created:
-                    member.needs_profile_completion = True
-                    member.save()
-                    created_member_ids.append(member.id)
+                # Instead of get_or_create, check if member exists first, to handle the cin validation differently
+                try:
+                    member = Member.objects.get(email=association.president_email)
+                    member_created = False
+                    print(f"Found existing member with email {association.president_email}")
+                except Member.DoesNotExist:
+                    # Create the member manually with explicit None for cin
+                    member = Member(
+                        email=association.president_email,
+                        name=president_name,
+                        address="Please update your address",
+                        nationality="Please update your nationality",
+                        birth_date=default_birth_date,
+                        job="Association President",
+                        joining_date=today,
+                        role="Président",
+                        association=association,
+                        cin=None,  # Explicitly set CIN to None
+                        needs_profile_completion=True
+                    )
+                    # Save without validation to bypass the cin validator for auto-created members
+                    member.save(force_insert=True)
+                    member_created = True
                     print(f"Created new Member entry for president: {president_name}")
-                else:
+
+                if not member_created:
                     # Update member with association president role if it already exists
                     if member.association != association or member.role != "Président":
                         member.association = association
                         member.role = "Président"
-                        member.save()
+                        member.needs_profile_completion = True
+                        # Save without validation
+                        member.save(force_update=True)
                         print(f"Updated existing Member entry for president: {president_name}")
+
+                created_member_ids.append(member.id)
             except Exception as e:
                 print(f"Error creating member for president: {str(e)}")
                 import traceback
@@ -742,32 +784,42 @@ class RegisterViewset(viewsets.ViewSet):
 
             # Create or update corresponding Member object
             try:
-                member, member_created = Member.objects.get_or_create(
-                    email=association.treasurer_email,
-                    defaults={
-                        'name': treasurer_name,
-                        'address': "Please update your address",
-                        'nationality': "Please update your nationality",
-                        'birth_date': default_birth_date,
-                        'job': "Association Treasurer",
-                        'joining_date': today,
-                        'role': "Trésorier",
-                        'association': association
-                    }
-                )
-
-                if member_created:
-                    member.needs_profile_completion = True
-                    member.save()
-                    created_member_ids.append(member.id)
+                # Instead of get_or_create, check if member exists first, to handle the cin validation differently
+                try:
+                    member = Member.objects.get(email=association.treasurer_email)
+                    member_created = False
+                    print(f"Found existing member with email {association.treasurer_email}")
+                except Member.DoesNotExist:
+                    # Create the member manually with explicit None for cin
+                    member = Member(
+                        email=association.treasurer_email,
+                        name=treasurer_name,
+                        address="Please update your address",
+                        nationality="Please update your nationality",
+                        birth_date=default_birth_date,
+                        job="Association Treasurer",
+                        joining_date=today,
+                        role="Trésorier",
+                        association=association,
+                        cin=None,  # Explicitly set CIN to None
+                        needs_profile_completion=True
+                    )
+                    # Save without validation to bypass the cin validator for auto-created members
+                    member.save(force_insert=True)
+                    member_created = True
                     print(f"Created new Member entry for treasurer: {treasurer_name}")
-                else:
+
+                if not member_created:
                     # Update member with association treasurer role if it already exists
                     if member.association != association or member.role != "Trésorier":
                         member.association = association
                         member.role = "Trésorier"
-                        member.save()
+                        member.needs_profile_completion = True
+                        # Save without validation
+                        member.save(force_update=True)
                         print(f"Updated existing Member entry for treasurer: {treasurer_name}")
+
+                created_member_ids.append(member.id)
             except Exception as e:
                 print(f"Error creating member for treasurer: {str(e)}")
                 import traceback
@@ -806,32 +858,42 @@ class RegisterViewset(viewsets.ViewSet):
 
             # Create or update corresponding Member object
             try:
-                member, member_created = Member.objects.get_or_create(
-                    email=association.secretary_email,
-                    defaults={
-                        'name': secretary_name,
-                        'address': "Please update your address",
-                        'nationality': "Please update your nationality",
-                        'birth_date': default_birth_date,
-                        'job': "Association Secretary",
-                        'joining_date': today,
-                        'role': "Secrétaire générale",
-                        'association': association
-                    }
-                )
-
-                if member_created:
-                    member.needs_profile_completion = True
-                    member.save()
-                    created_member_ids.append(member.id)
+                # Instead of get_or_create, check if member exists first, to handle the cin validation differently
+                try:
+                    member = Member.objects.get(email=association.secretary_email)
+                    member_created = False
+                    print(f"Found existing member with email {association.secretary_email}")
+                except Member.DoesNotExist:
+                    # Create the member manually with explicit None for cin
+                    member = Member(
+                        email=association.secretary_email,
+                        name=secretary_name,
+                        address="Please update your address",
+                        nationality="Please update your nationality",
+                        birth_date=default_birth_date,
+                        job="Association Secretary",
+                        joining_date=today,
+                        role="Secrétaire générale",
+                        association=association,
+                        cin=None,  # Explicitly set CIN to None
+                        needs_profile_completion=True
+                    )
+                    # Save without validation to bypass the cin validator for auto-created members
+                    member.save(force_insert=True)
+                    member_created = True
                     print(f"Created new Member entry for secretary: {secretary_name}")
-                else:
+
+                if not member_created:
                     # Update member with association secretary role if it already exists
                     if member.association != association or member.role != "Secrétaire générale":
                         member.association = association
                         member.role = "Secrétaire générale"
-                        member.save()
+                        member.needs_profile_completion = True
+                        # Save without validation
+                        member.save(force_update=True)
                         print(f"Updated existing Member entry for secretary: {secretary_name}")
+
+                created_member_ids.append(member.id)
             except Exception as e:
                 print(f"Error creating member for secretary: {str(e)}")
                 import traceback
@@ -917,7 +979,7 @@ class UserViewset(viewsets.ViewSet):
         User = get_user_model()
         try:
             user_to_validate = get_object_or_404(User, pk=pk)
-            print(f"Found user to validate: {user_to_validate.email}")
+            print(f"Found user to validate: {user_to_validate.email}, CIN: {user_to_validate.cin}")
         except Exception as e:
             print(f"Error finding user with ID {pk}: {str(e)}")
             return Response(
@@ -954,7 +1016,7 @@ class UserViewset(viewsets.ViewSet):
             user_to_validate.save()
             print(f"User {user_to_validate.email} validated successfully")
 
-            # After validation, create a corresponding Member entry
+            # Now create a corresponding Member entry
             try:
                 # Import Member model
                 from api.models import Member
@@ -962,50 +1024,96 @@ class UserViewset(viewsets.ViewSet):
                 import datetime
 
                 today = date.today()
-                default_birth_date = datetime.date(2000, 1, 1)
 
-                # Check if a Member with this email already exists
-                member, created = Member.objects.get_or_create(
-                    email=user_to_validate.email,
-                    defaults={
-                        'name': user_to_validate.full_name or user_to_validate.email,
-                        'address': "Please update your address",
-                        'nationality': "Please update your nationality",
-                        'birth_date': default_birth_date,
-                        'job': "Please update your job",
-                        'joining_date': today,
-                        'role': "Membre",  # Default role for regular members
-                        'association': user_to_validate.association,
-                        'needs_profile_completion': True  # Flag to indicate profile needs completion
-                    }
-                )
+                # Check if the user already has a CIN
+                cin = user_to_validate.cin
+                if not cin:
+                    print(f"Warning: User {user_to_validate.email} doesn't have a CIN")
 
-                if created:
-                    print(f"Created new Member entry for validated user: {user_to_validate.email}")
-                else:
-                    # If member already exists, make sure it's associated with the right association
-                    if member.association != user_to_validate.association:
-                        member.association = user_to_validate.association
-                        member.save()
-                        print(f"Updated existing Member entry for validated user: {user_to_validate.email}")
-                    else:
-                        print(f"Member record already exists for user: {user_to_validate.email}")
+                # Check for existing member with this email
+                try:
+                    existing_member = Member.objects.get(email=user_to_validate.email)
+                    print(f"Found existing member with email {user_to_validate.email} - skipping creation")
+
+                    # If member exists but has different association, update it
+                    if existing_member.association != user_to_validate.association:
+                        existing_member.association = user_to_validate.association
+                        existing_member.save()
+                        print(f"Updated existing member's association for {user_to_validate.email}")
+
+                except Member.DoesNotExist:
+                    # No existing member, create a new one
+                    # Set default birth date
+                    birth_date = datetime.date(2000, 1, 1)  # Default birth date
+
+                    # Check if any required field is missing
+                    needs_profile_completion = True  # Always start as True
+
+                    # Create new member with validated user data
+                    new_member = Member.objects.create(
+                        email=user_to_validate.email,
+                        name=user_to_validate.full_name or user_to_validate.email,
+                        cin=cin,
+                        birth_date=birth_date,
+                        address="Please update your address",  # Placeholder
+                        nationality="Please update your nationality",  # Placeholder
+                        job="Please update your job",  # Placeholder
+                        joining_date=today,
+                        role="Membre",  # Default role for regular members
+                        association=user_to_validate.association,
+                        needs_profile_completion=needs_profile_completion  # Always true for new members
+                    )
+                    print(
+                        f"Created new Member entry for validated user: {user_to_validate.email} with needs_profile_completion=True")
 
             except Exception as e:
                 print(f"Error creating member record for validated user: {str(e)}")
                 import traceback
                 traceback.print_exc()
-                # Continue even if member creation fails
+                # Continue even if member creation fails - user is still validated
 
             # Success response
             return Response({
                 "message": f"User {user_to_validate.email} has been validated and added to members"
             })
+
         elif action_type == 'reject':
             user_to_validate.is_validated = False
             user_to_validate.save()
             print(f"User {user_to_validate.email} rejected")
-            return Response({"message": f"User {user_to_validate.email} has been rejected"})
+
+            # Delete the user account if it's not in any special role
+            # Important: Don't delete users with special roles
+            if user_to_validate.role and user_to_validate.role.name in ['president', 'treasurer', 'secretary']:
+                print(f"User {user_to_validate.email} has role {user_to_validate.role.name}, not deleting account")
+            else:
+                # First check for and delete any existing Member record
+                try:
+                    from api.models import Member
+                    try:
+                        existing_member = Member.objects.get(email=user_to_validate.email)
+                        existing_member.delete()
+                        print(f"Deleted existing member record for rejected user: {user_to_validate.email}")
+                    except Member.DoesNotExist:
+                        # No member record to delete
+                        print(f"No member record found for rejected user: {user_to_validate.email}")
+                except Exception as e:
+                    print(f"Error checking/deleting member record: {str(e)}")
+
+                # Now consider deleting the user account (only for regular members)
+                try:
+                    if not user_to_validate.role or user_to_validate.role.name == 'member':
+                        user_to_validate.delete()
+                        print(f"Deleted user account for rejected user: {user_to_validate.email}")
+                        return Response({
+                            "message": f"User {user_to_validate.email} has been rejected and removed from the system"
+                        })
+                except Exception as e:
+                    print(f"Error deleting user account: {str(e)}")
+
+            return Response({
+                "message": f"User {user_to_validate.email} has been rejected"
+            })
         else:
             return Response({"error": "Invalid action. Use 'validate' or 'reject'"}, status=400)
 
