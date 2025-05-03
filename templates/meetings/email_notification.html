@@ -1,187 +1,128 @@
+{% load static %}
 <!DOCTYPE html>
-<html xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" lang="en">
-
+<html>
 <head>
-    <title>{{ title }}</title>
-    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
     <style>
-        * {
-            box-sizing: border-box;
-        }
-
         body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
             margin: 0;
             padding: 0;
-            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-            color: #333333;
         }
-
         .container {
             max-width: 600px;
             margin: 0 auto;
             padding: 20px;
         }
-
         .header {
-            background-color: #37474f;
-            color: #ffffff;
-            padding: 20px;
-            text-align: center;
-        }
-
-        .content {
-            background-color: #ffffff;
-            padding: 20px;
-        }
-
-        .meeting-details {
-            background-color: #f5f5f5;
+            background-color: #4a6bd8;
             padding: 15px;
-            border-radius: 5px;
-            margin: 15px 0;
+            text-align: center;
+            border-radius: 5px 5px 0 0;
+            color: white;
         }
-
-        .meeting-details table {
-            width: 100%;
-            border-collapse: collapse;
+        .content {
+            padding: 20px;
+            background-color: #fff;
+            border: 1px solid #ddd;
         }
-
-        .meeting-details table td {
-            padding: 8px;
-            vertical-align: top;
+        .footer {
+            text-align: center;
+            padding: 15px;
+            font-size: 12px;
+            color: #777;
+            background-color: #f8f9fa;
+            border-radius: 0 0 5px 5px;
+            border: 1px solid #ddd;
+            border-top: none;
         }
-
-        .meeting-details table td:first-child {
-            font-weight: bold;
-            width: 30%;
-        }
-
         .button {
             display: inline-block;
-            background-color: #37474f;
-            color: #ffffff;
-            text-decoration: none;
             padding: 10px 20px;
+            margin: 10px 5px;
+            text-decoration: none;
+            color: #fff;
             border-radius: 5px;
-            margin-top: 15px;
+            font-weight: bold;
         }
-
-        .response-buttons {
-            text-align: center;
-            margin: 20px 0;
+        .button-yes {
+            background-color: #28a745;
+        }
+        .button-no {
+            background-color: #dc3545;
+        }
+        .button-maybe {
+            background-color: #ffc107;
+            color: #333;
+        }
+        .meeting-details {
+            background-color: #f8f9fa;
             padding: 15px;
-            background-color: #f0f4ff;
-            border-radius: 8px;
-            border: 1px solid #d0d8ff;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .meeting-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
         }
 
-        .btn-attend {
-            display: inline-block;
-            background-color: #4CAF50;
-            color: #ffffff !important;
-            text-decoration: none;
-            padding: 12px 20px;
-            border-radius: 5px;
-            margin: 5px;
-            font-weight: bold;
-        }
-
-        .btn-decline {
-            display: inline-block;
-            background-color: #F44336;
-            color: #ffffff !important;
-            text-decoration: none;
-            padding: 12px 20px;
-            border-radius: 5px;
-            margin: 5px;
-            font-weight: bold;
-        }
-
-        .btn-tentative {
-            display: inline-block;
-            background-color: #FF9800;
-            color: #ffffff !important;
-            text-decoration: none;
-            padding: 12px 20px;
-            border-radius: 5px;
-            margin: 5px;
-            font-weight: bold;
+        /* Added styles for better mobile compatibility */
+        @media (max-width: 480px) {
+            .button {
+                display: block;
+                margin: 10px 0;
+                text-align: center;
+            }
         }
     </style>
 </head>
-
 <body>
     <div class="container">
         <div class="header">
-            <h1>{{ title }}</h1>
+            <h2>{{ title }}</h2>
         </div>
 
         <div class="content">
-            <p>Hello {{ user.full_name }},</p>
-
             <p>{{ message }}</p>
 
             <div class="meeting-details">
-                <table>
-                    <tr>
-                        <td>Meeting:</td>
-                        <td>{{ meeting.title }}</td>
-                    </tr>
-                    <tr>
-                        <td>Type:</td>
-                        <td>{{ meeting.get_meeting_type_display }}</td>
-                    </tr>
-                    <tr>
-                        <td>Date:</td>
-                        <td>{{ meeting_date }}</td>
-                    </tr>
-                    <tr>
-                        <td>Time:</td>
-                        <td>{{ meeting_time }}</td>
-                    </tr>
-                    <tr>
-                        <td>Location:</td>
-                        <td>{{ meeting_location }}</td>
-                    </tr>
-                    {% if meeting_link %}
-                    <tr>
-                        <td>Meeting Link:</td>
-                        <td><a href="{{ meeting_link }}">{{ meeting_link }}</a></td>
-                    </tr>
-                    {% endif %}
-                    <tr>
-                        <td>Status:</td>
-                        <td>{{ meeting.get_status_display }}</td>
-                    </tr>
-                </table>
-            </div>
-
-            {% if meeting.agenda %}
-            <h3>Agenda</h3>
-            <div style="white-space: pre-line;">{{ meeting.agenda }}</div>
-            {% endif %}
-
-            <!-- Response buttons for attendance - showing for all notification types -->
-            <div class="response-buttons">
-                <p><strong>Will you attend this meeting?</strong></p>
-                {% if attendee %}
-                    <a href="http://localhost:5173/meetings/response/{{ attendee.id }}/mtg-{{ attendee.id }}-{{ meeting.id }}/yes" class="btn-attend">Yes, I'll Attend</a>
-                    <a href="http://localhost:5173/meetings/response/{{ attendee.id }}/mtg-{{ attendee.id }}-{{ meeting.id }}/no" class="btn-decline">No, I Can't Attend</a>
-                    <a href="http://localhost:5173/meetings/response/{{ attendee.id }}/mtg-{{ attendee.id }}-{{ meeting.id }}/maybe" class="btn-tentative">Request Excuse</a>
-                {% else %}
-                    <p>Unable to display response options - attendee information not available.</p>
+                <div class="meeting-title">{{ meeting.title }}</div>
+                <p><strong>Date:</strong> {{ meeting_date }}</p>
+                <p><strong>Time:</strong> {{ meeting_time }}</p>
+                <p><strong>Location:</strong> {{ meeting_location }}</p>
+                {% if meeting_link %}
+                <p><strong>Meeting Link:</strong> <a href="{{ meeting_link }}">{{ meeting_link }}</a></p>
                 {% endif %}
             </div>
 
-            <a href="http://localhost:5173/meetings/{{ meeting.id }}" class="button">View Meeting Details</a>
+            {% if attendee and notification_type == 'invitation' %}
+            <p>Please respond with your availability:</p>
+
+            <div style="text-align: center; margin: 20px 0;">
+                <!-- Using the fixed direct response links --><!-- Ensure the URL format is correct -->
+               <a href="{{ base_url }}/meetings/response/{{ attendee.id }}/mtg-{{ attendee.id }}-{{ meeting.id }}/yes/" class="button button-yes">Yes, I'll Attend</a>
+               <a href="{{ base_url }}/meetings/response/{{ attendee.id }}/mtg-{{ attendee.id }}-{{ meeting.id }}/no/" class="button button-no">No, I Can't Attend</a>
+               <a href="{{ base_url }}/meetings/response/{{ attendee.id }}/mtg-{{ attendee.id }}-{{ meeting.id }}/maybe/" class="button button-maybe">Maybe / Need to Discuss</a>
+            </div>
+
+            <!-- Add a fallback text in case the buttons don't work -->
+            <p style="text-align: center; font-size: 13px; color: #666;">
+                If the buttons above don't work, please click <a href="{{ base_url }}/meetings/response/{{ attendee.id }}/mtg-{{ attendee.id }}-{{ meeting.id }}/">this link</a> to respond.
+            </p>
+            {% endif %}
+
+            <p>Thank you!</p>
         </div>
 
         <div class="footer">
-            <p>This is an automated message from MyOrg. Please do not reply to this email.</p>
-            <p>If you have any questions, please contact your association administrator.</p>
+            <p>This is an automated notification. Please do not reply to this email.</p>
+            <p>If you're having trouble with the response buttons, try copying and pasting the link into your browser.</p>
         </div>
     </div>
 </body>
-
 </html>

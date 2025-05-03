@@ -14,7 +14,11 @@ def schedule_meeting_reminders(sender, instance, created, **kwargs):
     """
     Schedule automated reminders for a meeting
     """
-    if created or instance.tracker.has_changed('start_date'):
+    # Check if this is a new meeting or if start_date has changed
+    # Fixed to use dictionary access instead of attribute access
+    if created or (hasattr(instance, 'tracker') and
+                  'changed_fields' in instance.tracker and
+                  'start_date' in instance.tracker['changed_fields']):
         from django.db import transaction
 
         # Schedule reminder based on meeting settings
@@ -26,90 +30,42 @@ def schedule_meeting_reminders(sender, instance, created, **kwargs):
             # For now, just print debug info
             print(f"Scheduled reminder for meeting: {instance.title}")
             print(f"Reminder will be sent on: {reminder_date}")
+@receiver(post_save, sender=Meeting)
+def meeting_status_changed(sender, instance, **kwargs):
+    """Detect when a meeting is marked as completed and send a reminder about the report"""
 
+    # Check if saved instance exists in the database (to avoid post_init signals)
+    if not instance.pk:
+        return
 
-@receiver(post_save, sender=MeetingNotification)
-def send_email_notification(sender, instance, created, **kwargs):
-    """
-    Send email notification when a platform notification is created
-    """
-    if created and instance.method in ['email', 'both'] and not instance.is_sent:
-        try:
-            # Create context for email
-            meeting = instance.meeting
-            user = instance.user
+    # Get previous instance if it exists
+    try:
+        # Fixed to handle tracker as a dictionary
+        if hasattr(instance, 'tracker') and 'old_status' in instance.tracker:
+            previous_status = instance.tracker['old_status']
+        else:
+            previous_status = None
+    except Exception:
+        previous_status = None
 
-            # Get attendee info if available in extra_data
-            attendee = None
-            if instance.extra_data and 'attendee_id' in instance.extra_data:
-                try:
-                    attendee_id = instance.extra_data['attendee_id']
-                    attendee = MeetingAttendee.objects.get(id=attendee_id)
-                    print(f"Found attendee with ID {attendee_id}")
-                except MeetingAttendee.DoesNotExist:
-                    print(f"Attendee with ID {attendee_id} not found")
-                    # If attendee not found by ID, try to find by user's email
-                    try:
-                        member = Member.objects.get(email=user.email, association=meeting.association)
-                        attendee = MeetingAttendee.objects.get(meeting=meeting, member=member)
-                        print(f"Found alternative attendee with ID {attendee.id}")
-                    except (Member.DoesNotExist, MeetingAttendee.DoesNotExist):
-                        print(f"No alternative attendee found for {user.email}")
-            else:
-                # If extra_data doesn't have attendee_id, try to find by user's email
-                try:
-                    member = Member.objects.get(email=user.email, association=meeting.association)
-                    attendee = MeetingAttendee.objects.get(meeting=meeting, member=member)
-                    print(f"Found attendee by email lookup: {attendee.id}")
-                except (Member.DoesNotExist, MeetingAttendee.DoesNotExist):
-                    print(f"No attendee found by email lookup for {user.email}")
+    # If status changed to 'completed' and no report exists yet
+    if instance.status == 'completed' and previous_status != 'completed' and not instance.reports.exists():
+        # Create a notification for the meeting creator or association admins
+        from notifications.services import NotificationService
 
-            context = {
-                'user': user,
-                'meeting': meeting,
-                'notification': instance,
-                'title': instance.title,
-                'message': instance.message,
-                'meeting_date': meeting.start_date.strftime('%A, %B %d, %Y'),
-                'meeting_time': meeting.start_date.strftime('%I:%M %p'),
-                'meeting_location': meeting.location if not meeting.is_virtual else 'Virtual Meeting',
-                'meeting_link': meeting.meeting_link if meeting.is_virtual else None,
-                'attendee': attendee,  # Include the attendee if found
-            }
-
-            # Debug output
-            print(f"Sending email to {user.email}")
-            print(f"Attendee included: {attendee is not None}")
-            if attendee:
-                print(f"Attendee ID: {attendee.id}, Member: {attendee.member.name}")
-
-            # Render email templates
-            html_message = render_to_string("meetings/email_notification.html", context=context)
-            plain_message = strip_tags(html_message)
-
-            # Send the email
-            msg = EmailMultiAlternatives(
-                subject=instance.title,
-                body=plain_message,
-                from_email="noreply.myorg@gmail.com",
-                to=[user.email]
-            )
-
-            msg.attach_alternative(html_message, "text/html")
-            msg.send()
-
-            # Update notification status
-            instance.is_sent = True
-            instance.sent_at = timezone.now()
-            instance.save()
-
-            print(f"Email notification sent to {user.email}: {instance.title}")
-
-        except Exception as e:
-            print(f"Error sending email notification: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
+        NotificationService.send_notification(
+            title=f"Procès-Verbal requis: {instance.title}",
+            message=(
+                f"La réunion '{instance.title}' est maintenant terminée. "
+                f"Veuillez joindre un Procès-Verbal (PV) pour finaliser cette réunion."
+            ),
+            notification_type='report_due',
+            related_object=instance,
+            url=f"/meetings/{instance.id}/report",
+            priority='medium',
+            requires_action=True,
+            action_deadline=timezone.now() + timezone.timedelta(days=7)  # Due in one week
+        )
 
 @receiver(pre_save, sender=Meeting)
 def setup_meeting_tracking(sender, instance, **kwargs):
@@ -137,8 +93,8 @@ def setup_meeting_tracking(sender, instance, **kwargs):
                     instance.tracker['changed_fields'].append(field)
                     instance.tracker[f'old_{field}'] = old_value
 
-            # Track if any field has changed
-            instance.tracker['has_changed'] = lambda field: field in instance.tracker['changed_fields']
+            # REMOVED: Don't define the lambda function anymore since we're not using it
+            # Instead, we check the changed_fields list directly in the other signal handlers
 
     except Meeting.DoesNotExist:
         # This is a new meeting

@@ -2,7 +2,7 @@ from django.db.models.signals import post_delete
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from .models import Transaction, BudgetAllocation
-
+from .models import ForeignDonationReport
 
 @receiver(post_save, sender=Transaction)
 def update_budget_after_transaction_verification(sender, instance, created, **kwargs):
@@ -78,3 +78,15 @@ def store_previous_status(sender, instance, **kwargs):
     else:
         # For new instances
         instance._prev_status = None
+@receiver(post_save, sender=Transaction)
+def create_foreign_donation_report(sender, instance, created, **kwargs):
+    """Create a foreign donation report when a transaction is created with a foreign donor"""
+    if created and instance.transaction_type == 'income' and instance.donor:
+        try:
+            # Check if the donor is external (neither member nor internal)
+            if not instance.donor.is_member and not instance.donor.is_internal:
+                # Create a report for this transaction
+                ForeignDonationReport.objects.create(transaction=instance)
+                print(f"Created foreign donation report for transaction {instance.id}")
+        except Exception as e:
+            print(f"Error creating foreign donation report: {str(e)}")

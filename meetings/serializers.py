@@ -1,19 +1,7 @@
 from rest_framework import serializers
-from .models import Meeting, MeetingAttendee, MeetingAgendaItem, MeetingReport, MeetingNotification
+from .models import Meeting, MeetingAttendee, MeetingReport, MeetingNotification
 from api.serializers import MemberSerializer
 from users.serializers import UserProfileSerializer
-
-
-class MeetingAgendaItemSerializer(serializers.ModelSerializer):
-    presenter_details = MemberSerializer(source='presenter', read_only=True)
-
-    class Meta:
-        model = MeetingAgendaItem
-        fields = [
-            'id', 'meeting', 'title', 'description', 'presenter', 'presenter_details',
-            'duration_minutes', 'order', 'is_completed', 'notes', 'created_at', 'updated_at'
-        ]
-        read_only_fields = ['created_at', 'updated_at']
 
 
 class MeetingAttendeeSerializer(serializers.ModelSerializer):
@@ -35,7 +23,7 @@ class MeetingReportSerializer(serializers.ModelSerializer):
     class Meta:
         model = MeetingReport
         fields = [
-            'id', 'meeting', 'title', 'content', 'summary', 'report_file',
+            'id', 'meeting', 'title', 'summary', 'report_file',
             'is_approved', 'approved_by', 'approved_by_details', 'approval_date',
             'created_by', 'created_by_details', 'created_at', 'updated_at'
         ]
@@ -56,7 +44,6 @@ class MeetingSerializer(serializers.ModelSerializer):
     created_by_details = UserProfileSerializer(source='created_by', read_only=True)
     association_name = serializers.CharField(source='association.name', read_only=True)
     attendees_count = serializers.SerializerMethodField()
-    agenda_items = MeetingAgendaItemSerializer(many=True, read_only=True)
     attendees = MeetingAttendeeSerializer(many=True, read_only=True)
     reports = MeetingReportSerializer(many=True, read_only=True)
 
@@ -66,10 +53,10 @@ class MeetingSerializer(serializers.ModelSerializer):
             'id', 'title', 'description', 'meeting_type', 'status',
             'association', 'association_name', 'created_by', 'created_by_details',
             'start_date', 'end_date', 'location', 'is_virtual', 'meeting_link',
-            'agenda', 'minutes', 'agenda_document', 'minutes_document',
+            'agenda', 'agenda_document',
             'is_recurring', 'recurrence_pattern', 'notification_method',
             'reminder_days_before', 'created_at', 'updated_at',
-            'attendees_count', 'agenda_items', 'attendees', 'reports'
+            'attendees_count', 'attendees', 'reports'
         ]
         read_only_fields = ['created_at', 'updated_at', 'created_by', 'attendees_count']
 
@@ -131,7 +118,5 @@ class ReportGenerationSerializer(serializers.Serializer):
     """Serializer for generating meeting reports"""
     meeting_id = serializers.IntegerField()
     include_attendance = serializers.BooleanField(default=True)
-    include_agenda_items = serializers.BooleanField(default=True)
-    include_minutes = serializers.BooleanField(default=True)
     summary = serializers.CharField(required=False, allow_blank=True)
     report_title = serializers.CharField(required=False, allow_blank=True)

@@ -6,9 +6,8 @@ from django.db.models import Sum, Q
 from django.utils import timezone
 import io
 import csv
+from .models import Transaction, BudgetAllocation, ForeignDonationReport
 
-
-# This is intended for future PDF report generation
 def generate_pdf_report(report_instance):
     """
     Generate a PDF report for the given financial report instance
@@ -324,3 +323,248 @@ def export_transactions_to_csv(queryset, output_file=None):
     # Return CSV content if no output file provided
     if output_file is None:
         return output.getvalue()
+
+
+def generate_foreign_donation_letter(report):
+    """Generate a letter to the Prime Ministry about a foreign donation with enhanced error handling"""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    logger.info(f"Starting letter generation for report {report.id}")
+
+    try:
+        # Required imports
+        from reportlab.lib.pagesizes import A4
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+        from django.utils import timezone
+        import io
+        from django.core.files.base import ContentFile
+
+        # Get transaction and donor information
+        transaction = report.transaction
+        if not transaction:
+            msg = f"Transaction not found for report {report.id}"
+            logger.error(msg)
+            raise ValueError(msg)
+
+        logger.info(f"Found transaction: {transaction.id}, type: {transaction.transaction_type}")
+
+        donor = transaction.donor
+        if not donor:
+            msg = f"Donor not found for transaction {transaction.id}"
+            logger.error(msg)
+            raise ValueError(msg)
+
+        logger.info(f"Found donor: {donor.id}, name: {donor.name if hasattr(donor, 'name') else 'Unknown'}")
+
+        # Get association data from the transaction
+        association = None
+        if hasattr(transaction, 'association') and transaction.association:
+            association = transaction.association
+            logger.info(f"Found association directly from transaction: {association.id}")
+        elif hasattr(transaction, 'project') and transaction.project and hasattr(transaction.project, 'association'):
+            association = transaction.project.association
+            logger.info(f"Found association from project: {association.id}")
+
+        # Set up document
+        buffer = io.BytesIO()
+        logger.info("Creating PDF document")
+
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=2 * cm,
+            leftMargin=2 * cm,
+            topMargin=2 * cm,
+            bottomMargin=2 * cm
+        )
+        elements = []
+
+        # Styles
+        styles = getSampleStyleSheet()
+        normal_style = styles['Normal']
+        title_style = styles['Title']
+        heading_style = styles['Heading1']
+        subheading_style = styles['Heading2']
+
+        # Get association details or use defaults if not available
+        if association:
+            logger.info(
+                f"Processing association details for {association.name if hasattr(association, 'name') else 'Unknown'}")
+            association_name = association.name if hasattr(association, 'name') else "Association"
+            association_address1 = (
+                association.address_line1 if hasattr(association, 'address_line1')
+                else association.address if hasattr(association, 'address')
+                else "Tunisia"
+            )
+            association_address2 = association.address_line2 if hasattr(association, 'address_line2') else ""
+            association_phone = association.phone if hasattr(association, 'phone') else ""
+            association_email = association.email if hasattr(association, 'email') else ""
+            president_name = (
+                association.president_name if hasattr(association, 'president_name')
+                else (association.president.get_full_name() if hasattr(association, 'president') else "")
+            )
+        else:
+            # Use generic placeholders if association is not available
+            logger.warning("No association found, using default values")
+            association_name = "Your Association"
+            association_address1 = "Association Address"
+            association_address2 = "Tunisia"
+            association_phone = ""
+            association_email = ""
+            president_name = "Association President"
+
+        # Add organization header/letterhead
+        logger.info("Building letter content")
+        elements.append(Paragraph(association_name, title_style))
+        elements.append(Spacer(1, 0.5 * cm))
+        elements.append(Paragraph(association_address1, normal_style))
+        if association_address2:
+            elements.append(Paragraph(association_address2, normal_style))
+        if association_phone:
+            elements.append(Paragraph(f"Phone: {association_phone}", normal_style))
+        if association_email:
+            elements.append(Paragraph(f"Email: {association_email}", normal_style))
+        elements.append(Spacer(1, 1 * cm))
+
+        # Date
+        today = timezone.now().date().strftime("%d/%m/%Y")
+        elements.append(Paragraph(f"Date: {today}", normal_style))
+        elements.append(Spacer(1, 0.5 * cm))
+
+        # Recipient
+        elements.append(Paragraph("À l'attention de Monsieur le Premier Ministre", heading_style))
+        elements.append(Paragraph("Gouvernement de la République Tunisienne", normal_style))
+        elements.append(Paragraph("Place du Gouvernement - La Kasbah", normal_style))
+        elements.append(Paragraph("1020 Tunis", normal_style))
+        elements.append(Spacer(1, 1 * cm))
+
+        # Subject
+        elements.append(Paragraph("Objet: Déclaration de don d'origine étrangère", subheading_style))
+        elements.append(Spacer(1, 0.5 * cm))
+
+        # Greeting
+        elements.append(Paragraph("Monsieur le Premier Ministre,", normal_style))
+        elements.append(Spacer(1, 0.5 * cm))
+
+        # Body
+        letter_body = """
+        Conformément aux dispositions légales régissant les associations en Tunisie, nous avons l'honneur de vous informer que notre association a reçu un don d'origine étrangère selon les détails suivants:
+        """
+        elements.append(Paragraph(letter_body, normal_style))
+        elements.append(Spacer(1, 0.5 * cm))
+
+        # Safely get donor and transaction information
+        logger.info("Adding transaction details to letter")
+        donor_name = donor.name if donor and hasattr(donor, 'name') else "Non spécifié"
+        donor_address = donor.address if donor and hasattr(donor, 'address') else "Non spécifié"
+
+        # Convert amount to string safely
+        try:
+            transaction_amount = f"{transaction.amount} TND" if hasattr(transaction, 'amount') else "Non spécifié"
+        except Exception as e:
+            logger.warning(f"Error formatting transaction amount: {e}")
+            transaction_amount = "Non spécifié"
+
+        # Format date safely
+        try:
+            transaction_date = transaction.date.strftime("%d/%m/%Y") if hasattr(transaction,
+                                                                                'date') and transaction.date else "Non spécifié"
+        except Exception as e:
+            logger.warning(f"Error formatting transaction date: {e}")
+            transaction_date = "Non spécifié"
+
+        transaction_ref = transaction.reference_number or "Non spécifié"
+        transaction_desc = transaction.description or "Non spécifié"
+
+        # Log data for debugging
+        logger.info(f"Donor: {donor_name}, Amount: {transaction_amount}, Date: {transaction_date}")
+
+        # Donation details
+        data = [
+            ["Donateur:", donor_name],
+            ["Pays d'origine:", donor_address],
+            ["Montant reçu:", transaction_amount],
+            ["Date de réception:", transaction_date],
+            ["Numéro de référence:", transaction_ref],
+            ["Description:", transaction_desc]
+        ]
+
+        # Create the table
+        table = Table(data, colWidths=[4 * cm, 10 * cm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.black),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (0, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+
+        elements.append(table)
+        elements.append(Spacer(1, 0.5 * cm))
+
+        # Additional information
+        additional_info = """
+        Nous confirmons que ces fonds seront utilisés conformément aux objectifs de notre association et à la législation en vigueur.
+
+        Nous vous informons également que, conformément à la loi, cette déclaration sera publiée dans un journal quotidien diffusé sur le territoire national dans un délai maximum de trente jours à compter de la date de réception du don.
+        """
+        elements.append(Paragraph(additional_info, normal_style))
+        elements.append(Spacer(1, 1 * cm))
+
+        # Closing
+        elements.append(
+            Paragraph("Veuillez agréer, Monsieur le Premier Ministre, l'expression de notre haute considération.",
+                      normal_style))
+        elements.append(Spacer(1, 1 * cm))
+
+        # Signature
+        elements.append(Paragraph("Le Président de l'Association", normal_style))
+        elements.append(Spacer(1, 2 * cm))
+        elements.append(Paragraph("____________________", normal_style))
+        elements.append(Paragraph(president_name, normal_style))
+        elements.append(Paragraph("[Cachet de l'Association]", normal_style))
+
+        # Build PDF
+        logger.info("Building PDF document")
+        doc.build(elements)
+
+        # Create a filename with transaction ID and date
+        filename = f"foreign_donation_letter_tx{transaction.id}_{timezone.now().strftime('%Y%m%d')}.pdf"
+
+        # Save the file to the model
+        logger.info(f"Saving PDF file as {filename}")
+
+        # Check if the report already has a letter file
+        if report.letter_file:
+            logger.info(f"Report already has a letter file, deleting: {report.letter_file.name}")
+            # Delete the existing file to avoid accumulating unused files
+            try:
+                report.letter_file.delete(save=False)
+            except Exception as e:
+                logger.warning(f"Could not delete existing letter file: {e}")
+
+        # Save the new file
+        report.letter_file.save(filename, ContentFile(buffer.getvalue()), save=False)
+        report.letter_generated = True
+        report.save()
+
+        logger.info("Letter generated successfully")
+        return report
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Error generating foreign donation letter: {str(e)}")
+        logger.error(traceback.format_exc())
+
+        # Add error info to report
+        if hasattr(report, 'notes'):
+            report.notes = (report.notes or '') + f"\nError generating letter: {str(e)}"
+            report.save(update_fields=['notes'])
+
+        raise
