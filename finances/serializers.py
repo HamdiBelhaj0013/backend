@@ -245,7 +245,7 @@ class ForeignDonationReportSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'transaction', 'transaction_details', 'report_required', 'letter_generated',
             'letter_file', 'journal_publication_reference', 'journal_publication_date',
-            'reporting_deadline', 'report_status', 'sent_date', 'notes',
+            'journal_publication_text', 'reporting_deadline', 'report_status', 'sent_date', 'notes',
             'days_until_deadline', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'days_until_deadline', 'transaction_details']

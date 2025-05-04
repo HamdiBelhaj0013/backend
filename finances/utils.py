@@ -8,6 +8,99 @@ import io
 import csv
 from .models import Transaction, BudgetAllocation, ForeignDonationReport
 
+
+def generate_foreign_donation_journal_publication(report):
+    """Generate a journal publication text for foreign donation report with error handling"""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    logger.info(f"Starting journal publication generation for report {report.id}")
+
+    try:
+        # Get transaction and donor information
+        transaction = report.transaction
+        if not transaction:
+            msg = f"Transaction not found for report {report.id}"
+            logger.error(msg)
+            raise ValueError(msg)
+
+        donor = transaction.donor
+        if not donor:
+            msg = f"Donor not found for transaction {transaction.id}"
+            logger.error(msg)
+            raise ValueError(msg)
+
+        # Get association data
+        association = None
+        if hasattr(transaction, 'association') and transaction.association:
+            association = transaction.association
+        elif hasattr(transaction, 'project') and transaction.project and hasattr(transaction.project, 'association'):
+            association = transaction.project.association
+
+        # Format donor and transaction information
+        donor_name = donor.name if donor and hasattr(donor, 'name') else "Non spécifié"
+        # Anonymize donor if requested
+        if donor.is_anonymous:
+            donor_name = "Donateur Anonyme"
+
+        # Format transaction amount safely
+        try:
+            transaction_amount = f"{transaction.amount} TND" if hasattr(transaction, 'amount') else "Non spécifié"
+        except Exception as e:
+            logger.warning(f"Error formatting transaction amount: {e}")
+            transaction_amount = "Non spécifié"
+
+        # Format transaction date safely
+        try:
+            transaction_date = transaction.date.strftime("%d/%m/%Y") if hasattr(transaction,
+                                                                                'date') and transaction.date else "Non spécifié"
+        except Exception as e:
+            logger.warning(f"Error formatting transaction date: {e}")
+            transaction_date = "Non spécifié"
+
+        # Get association details or use defaults
+        if association:
+            association_name = association.name if hasattr(association, 'name') else "Association"
+            association_president = (
+                association.president_name if hasattr(association, 'president_name')
+                else (association.president.get_full_name() if hasattr(association, 'president') else "")
+            )
+        else:
+            association_name = "Votre Association"
+            association_president = "Le Président de l'Association"
+
+        # Generate publication text
+        publication_text = f"""
+AVIS DE DON D'ORIGINE ETRANGERE
+
+Conformément aux dispositions du décret-loi n° 2011-88 du 24 septembre 2011, portant organisation des associations, 
+{association_name} déclare avoir reçu un don d'origine étrangère de {transaction_amount} en date du {transaction_date}.
+
+Le don, versé par {donor_name}, a été déclaré au Premier Ministre conformément à la loi. Les fonds seront utilisés 
+dans le cadre des activités de l'association conformément aux objectifs énoncés dans ses statuts.
+
+Pour {association_name}
+{association_president}
+"""
+
+        # Save the generated text to the report
+        report.journal_publication_text = publication_text
+        report.save(update_fields=['journal_publication_text'])
+
+        logger.info(f"Journal publication text generated for report {report.id}")
+        return report
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Error generating journal publication: {str(e)}")
+        logger.error(traceback.format_exc())
+
+        # Add error info to report
+        if hasattr(report, 'notes'):
+            report.notes = (report.notes or '') + f"\nError generating journal publication: {str(e)}"
+            report.save(update_fields=['notes'])
+
+        raise
 def generate_pdf_report(report_instance):
     """
     Generate a PDF report for the given financial report instance
