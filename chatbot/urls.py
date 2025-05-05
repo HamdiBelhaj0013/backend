@@ -1,7 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ConversationViewSet, DocumentViewSet
-from .direct_views import DirectChatView
+from .views import ConversationViewSet, DocumentViewSet, DirectChatView
 
 router = DefaultRouter()
 router.register(r'conversations', ConversationViewSet, basename='conversation')

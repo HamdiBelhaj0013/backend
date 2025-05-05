@@ -76,7 +76,6 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
-                'auth.context_processors.base_url',  # Add custom context processor
             ],
         },
     },
@@ -84,9 +83,12 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'auth.wsgi.application'
 
+# In settings.py - make sure REST_FRAMEWORK is a dictionary, not a function
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ('knox.auth.TokenAuthentication',),
-    'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend']
+    'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
+    'EXCEPTION_HANDLER': 'rest_framework.views.exception_handler',
+    'FORMAT_SUFFIX_KWARG': 'format'
 }
 
 # Database
@@ -122,8 +124,6 @@ os.makedirs(os.path.join(MEETINGS_UPLOAD_DIR, 'agenda'), exist_ok=True)
 os.makedirs(os.path.join(MEETINGS_UPLOAD_DIR, 'minutes'), exist_ok=True)
 os.makedirs(os.path.join(MEETINGS_UPLOAD_DIR, 'reports'), exist_ok=True)
 
-# Chatbot settings
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators

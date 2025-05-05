@@ -19,7 +19,7 @@ class ChatbotService:
         self.model_loaded = False
 
     def _load_model_if_needed(self):
-        """Lazy-load the model only when needed with better error handling"""
+        """Lazy-load the model with GPU acceleration"""
         if self.model_loaded:
             return self.llm_available
 
@@ -28,35 +28,36 @@ class ChatbotService:
             model_path = os.path.join(settings.MEDIA_ROOT, 'models', 'mistral-7b-instruct-v0.1.Q4_K_M.gguf')
 
             if os.path.exists(model_path):
-                logger.info(f"Loading model from {model_path} with optimized settings")
+                logger.info(f"Loading model from {model_path} with CUDA acceleration")
 
                 try:
-                    # Use more memory-efficient settings
+                    # GPU-accelerated settings
                     self.llm = Llama(
                         model_path=model_path,
-                        n_ctx=512,  # Reduce context window
-                        n_threads=2,  # Reduce thread count
-                        n_batch=8,  # Smaller batch size
-                        use_mlock=False  # Don't lock memory
+                        n_ctx=4096,  # Increased context window
+                        n_gpu_layers=-1,  # Use all layers on GPU
+                        n_batch=512,  # Larger batch size for GPU
+                        use_mlock=True,  # Lock memory for speed
+                        n_threads=4,  # CPU threads for operations not on GPU
+                        seed=42,  # Consistent outputs
+                        verbose=False  # Reduce log spam
                     )
                     self.llm_available = True
-                    logger.info(f"LLM loaded successfully with memory-optimized settings")
+                    logger.info(f"LLM loaded successfully with CUDA acceleration")
                 except Exception as e:
-                    logger.error(f"Error loading LLM with initial settings: {e}")
-                    logger.info("Trying with minimal settings...")
-
-                    # Try with absolute minimal settings
+                    logger.error(f"Error loading LLM with CUDA: {e}")
+                    # Fallback to CPU-only mode
                     try:
                         self.llm = Llama(
                             model_path=model_path,
-                            n_ctx=256,
-                            n_threads=1,
-                            n_batch=1
+                            n_ctx=2048,  # Still increase context but less
+                            n_batch=32,
+                            n_threads=8  # More CPU threads as compensation
                         )
                         self.llm_available = True
-                        logger.info("LLM loaded with minimal settings")
+                        logger.info("LLM loaded with CPU-only fallback")
                     except Exception as e:
-                        logger.error(f"Error loading LLM with minimal settings: {e}")
+                        logger.error(f"Error loading LLM with fallback settings: {e}")
                         self.llm_available = False
             else:
                 logger.warning(f"LLM model file not found at {model_path}")
@@ -112,73 +113,84 @@ INSTRUCTIONS:
         return history
 
     def _generate_response_with_local_llm(self, query, relevant_chunks, conversation_history=None):
-        """Generate a response using the local LLM with better error handling"""
+        """Generate a response using GPU-accelerated LLM"""
         if not self._load_model_if_needed():
             logger.warning("LLM not available, using fallback response")
             return self._generate_fallback_response(query)
 
         try:
-            # Create a simple prompt instead of chat format for testing
-            chunks_text = "\n\n".join([chunk.content for chunk in relevant_chunks]) if relevant_chunks else ""
+            # Sort chunks by relevance score
+            # For this to work, modify find_relevant_chunks to return chunks with scores
 
-            simple_prompt = f"""Sur base des extraits du décret-loi n° 2011-88 du 24 septembre 2011 portant organisation des associations en Tunisie ci-dessous:
+            # Construct a prompt with adaptive context
+            system_instruction = "Tu es un expert juridique spécialisé dans la législation tunisienne sur les associations."
+            context_text = ""
 
-    {chunks_text}
+            # Determine how many chunks we can use based on query length
+            max_chunk_tokens = 3500 - len(query)  # Reserve ~500 tokens for the system instruction and query
+            current_tokens = 0
+            chunks_used = 0
 
-    Question: {query}
+            for chunk in relevant_chunks:
+                chunk_text = chunk.content
+                # Rough token estimate (can be improved with a proper tokenizer)
+                estimated_tokens = len(chunk_text.split()) * 1.3
+                if current_tokens + estimated_tokens > max_chunk_tokens:
+                    break
 
-    Réponse:"""
+                context_text += f"\n\nExtrait du document '{chunk.document.title}':\n{chunk_text}"
+                current_tokens += estimated_tokens
+                chunks_used += 1
 
-            logger.info(f"Generating response for query: {query}")
-            logger.info(f"Using {len(relevant_chunks)} relevant chunks")
+            logger.info(f"Using {chunks_used} chunks out of {len(relevant_chunks)} available")
 
-            # Try simple completion first
+            # Construct chat format for better control
+            messages = [
+                {"role": "system", "content": f"{system_instruction}\n\nContexte juridique:\n{context_text}"},
+            ]
+
+            # Add conversation history (latest 2-3 messages only)
+            if conversation_history:
+                for msg in conversation_history[-3:]:
+                    messages.append(msg)
+
+            # Add the current query
+            messages.append({"role": "user", "content": query})
+
             try:
-                logger.info("Attempting simple text completion")
-                output = self.llm(
-                    simple_prompt,
-                    max_tokens=256,
-                    temperature=0.7,
-                    stop=["Question:", "\n\n"]
-                )
-                response_text = output['choices'][0]['text'].strip()
-                logger.info(f"Generated response with simple completion: {response_text[:100]}...")
-                return response_text
-            except Exception as e:
-                logger.error(f"Error with simple completion: {e}")
-
-                # Fall back to original approach
-                logger.info("Falling back to chat completion")
-                system_prompt = self._create_system_prompt(relevant_chunks)
-
-                # Build messages for chat completion
-                messages = [{"role": "system", "content": system_prompt}]
-
-                # Keep history minimal
-                if conversation_history:
-                    # Just add the last message if available
-                    if len(conversation_history) > 0:
-                        messages.append(conversation_history[-1])
-
-                # Add the current query
-                messages.append({"role": "user", "content": query})
-
-                # Try chat completion
+                # Use chat completion for more structured outputs
                 response = self.llm.create_chat_completion(
                     messages=messages,
-                    max_tokens=256,  # Reduced from 512
-                    temperature=0.7
+                    max_tokens=1024,  # Generate longer responses
+                    temperature=0.7,
+                    top_p=0.9,
+                    top_k=40,
+                    repeat_penalty=1.1,  # Reduce repetition
+                    stop=["Utilisateur:", "User:"]  # Stop at appropriate boundaries
                 )
 
                 generated_text = response["choices"][0]["message"]["content"]
                 logger.info(f"Generated response with chat completion: {generated_text[:100]}...")
                 return generated_text.strip()
 
+            except Exception as e:
+                logger.error(f"Error with chat completion: {e}")
+                # Fallback to simpler completion if needed
+                minimal_prompt = f"{system_instruction}\n\nContexte juridique:\n{context_text[:1000]}...\n\nQuestion: {query}\n\nRéponse:"
+
+                output = self.llm(
+                    minimal_prompt,
+                    max_tokens=768,
+                    temperature=0.7,
+                    top_p=0.9,
+                    stop=["Question:"]
+                )
+                response_text = output['choices'][0]['text'].strip()
+                return response_text
+
         except Exception as e:
             logger.error(f"Error generating response with local LLM: {str(e)}")
             logger.error(traceback.format_exc())
-
-            # Try with a hardcoded response based on the query
             return self._generate_fallback_response(query)
 
     def _generate_fallback_response(self, query):
