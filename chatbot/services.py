@@ -19,56 +19,235 @@ class ChatbotService:
         self.model_loaded = False
 
     def _load_model_if_needed(self):
-        """Lazy-load the model with GPU acceleration"""
+        """Lazy-load the model with optimized GPU acceleration"""
         if self.model_loaded:
             return self.llm_available
 
+        return self._load_model_with_enhanced_gpu()
+
+    def _load_model_with_enhanced_gpu(self):
+        """Load model with optimized GPU acceleration"""
         try:
+            import torch
+            import os
             from llama_cpp import Llama
+
+            # Force CUDA settings
+            os.environ["LLAMA_CUBLAS"] = "1"
+            os.environ["GGML_CUDA_FORCE_MMQ"] = "1"  # Force matrix multiplication on GPU
+
+            # Model path
             model_path = os.path.join(settings.MEDIA_ROOT, 'models', 'mistral-7b-instruct-v0.1.Q4_K_M.gguf')
+            if not os.path.exists(model_path):
+                logger.error(f"Model file not found at {model_path}")
+                return False
 
-            if os.path.exists(model_path):
-                logger.info(f"Loading model from {model_path} with CUDA acceleration")
+            # Check GPU
+            gpu_available = torch.cuda.is_available()
+            if not gpu_available:
+                logger.warning("No CUDA-compatible GPU detected, using CPU")
+                return self._fallback_to_cpu(model_path)
 
+            # Get GPU info
+            gpu_name = torch.cuda.get_device_properties(0).name
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # GB
+            logger.info(f"GPU: {gpu_name}, Memory: {gpu_memory:.2f} GB")
+
+            # For RTX 4060 8GB, we can safely use more layers on GPU
+            # Start with conservative settings and gradually increase if stable
+            n_gpu_layers = 16  # Half the layers on GPU (total is 32)
+
+            try:
+                logger.info(f"Loading model with {n_gpu_layers} layers on GPU")
+                self.llm = Llama(
+                    model_path=model_path,
+                    n_ctx=2048,
+                    n_gpu_layers=n_gpu_layers,
+                    n_batch=512,  # Increase batch size for better throughput
+                    use_mmap=False,  # Critical for GPU usage
+                    use_mlock=True,
+                    offload_kqv=True,  # Helps with memory efficiency
+                    verbose=True
+                )
+
+                # Test if model loaded correctly
+                test_result = self.llm("Test prompt.", max_tokens=5)
+                logger.info(f"GPU model test successful: {test_result}")
+
+                # Check VRAM usage after loading
+                if hasattr(torch.cuda, 'memory_allocated'):
+                    vram_used = torch.cuda.memory_allocated() / (1024 ** 3)
+                    logger.info(f"VRAM used after model load: {vram_used:.2f} GB")
+
+                self.llm_available = True
+                self.model_loaded = True
+                return True
+
+            except Exception as e:
+                logger.error(f"Error with full GPU settings: {str(e)}")
+                logger.error(traceback.format_exc())
+
+                # Try with fewer GPU layers as fallback
+                logger.info("Attempting with fewer GPU layers")
                 try:
-                    # GPU-accelerated settings
                     self.llm = Llama(
                         model_path=model_path,
-                        n_ctx=4096,  # Increased context window
-                        n_gpu_layers=-1,  # Use all layers on GPU
-                        n_batch=512,  # Larger batch size for GPU
-                        use_mlock=True,  # Lock memory for speed
-                        n_threads=4,  # CPU threads for operations not on GPU
-                        seed=42,  # Consistent outputs
-                        verbose=False  # Reduce log spam
+                        n_ctx=2048,
+                        n_gpu_layers=8,  # Reduced GPU layers
+                        n_batch=256,
+                        use_mmap=False,
+                        use_mlock=True,
+                        verbose=True
                     )
+                    test_result = self.llm("Test prompt.", max_tokens=5)
+                    logger.info(f"Reduced GPU model test successful: {test_result}")
                     self.llm_available = True
-                    logger.info(f"LLM loaded successfully with CUDA acceleration")
-                except Exception as e:
-                    logger.error(f"Error loading LLM with CUDA: {e}")
-                    # Fallback to CPU-only mode
-                    try:
-                        self.llm = Llama(
-                            model_path=model_path,
-                            n_ctx=2048,  # Still increase context but less
-                            n_batch=32,
-                            n_threads=8  # More CPU threads as compensation
-                        )
-                        self.llm_available = True
-                        logger.info("LLM loaded with CPU-only fallback")
-                    except Exception as e:
-                        logger.error(f"Error loading LLM with fallback settings: {e}")
-                        self.llm_available = False
-            else:
-                logger.warning(f"LLM model file not found at {model_path}")
-                self.llm_available = False
+                    self.model_loaded = True
+                    return True
+                except:
+                    # As a last resort, try with minimal GPU usage
+                    return self._try_minimal_gpu(model_path)
 
         except Exception as e:
-            logger.error(f"Error initializing LLM: {e}")
-            self.llm_available = False
+            logger.error(f"Unexpected error in GPU initialization: {str(e)}")
+            logger.error(traceback.format_exc())
+            return self._fallback_to_cpu(model_path)
 
-        self.model_loaded = True
-        return self.llm_available
+    def _try_minimal_gpu(self, model_path):
+        """Try with absolute minimal GPU settings"""
+        try:
+            from llama_cpp import Llama
+            logger.info("Attempting with minimal GPU settings")
+            self.llm = Llama(
+                model_path=model_path,
+                n_ctx=1024,
+                n_gpu_layers=1,  # Absolute minimum
+                n_batch=64,
+                use_mmap=False,
+                use_mlock=True,
+                verbose=True
+            )
+            test_result = self.llm("Test.", max_tokens=5)
+            logger.info(f"Minimal GPU model test successful: {test_result}")
+            self.llm_available = True
+            self.model_loaded = True
+            return True
+        except Exception as e:
+            logger.error(f"Error with minimal GPU settings: {str(e)}")
+            return self._fallback_to_cpu(model_path)
+
+    def _try_reduced_gpu_settings(self, model_path):
+        """Try loading with minimal GPU usage as a fallback"""
+        try:
+            from llama_cpp import Llama
+            logger.info("Attempting to load with reduced GPU settings...")
+
+            # Very conservative settings that should work on most GPUs
+            self.llm = Llama(
+                model_path=model_path,
+                n_ctx=2048,
+                n_gpu_layers=20,  # Only put a few layers on GPU
+                n_batch=64,
+                use_mlock=True,
+                offload_kqv=True,
+                seed=42,
+                verbose=True  # Enable verbose to see more diagnostics
+            )
+            self.llm_available = True
+            logger.info("LLM loaded with minimal GPU acceleration")
+            return True
+        except Exception as e:
+            logger.error(f"Error loading LLM with reduced GPU settings: {str(e)}")
+            return False
+
+    def diagnose_gpu_issues(self):
+        """Run diagnostics to identify GPU-related issues"""
+        try:
+            import torch
+            import sys
+            import subprocess
+
+            results = {
+                "pytorch_available": True,
+                "cuda_available": torch.cuda.is_available(),
+                "gpu_count": 0,
+                "gpu_details": [],
+                "cuda_version": None,
+                "system_info": {}
+            }
+
+            # Check CUDA version
+            if hasattr(torch.version, 'cuda'):
+                results["cuda_version"] = torch.version.cuda
+
+            # Get GPU details
+            if results["cuda_available"]:
+                results["gpu_count"] = torch.cuda.device_count()
+                for i in range(results["gpu_count"]):
+                    try:
+                        props = torch.cuda.get_device_properties(i)
+                        results["gpu_details"].append({
+                            "index": i,
+                            "name": props.name,
+                            "compute_capability": f"{props.major}.{props.minor}",
+                            "memory_gb": props.total_memory / (1024 ** 3)
+                        })
+                    except Exception as e:
+                        results["gpu_details"].append({
+                            "index": i,
+                            "error": str(e)
+                        })
+
+            # Check if nvidia-smi is available (more reliable GPU detection)
+            try:
+                nvidia_smi = subprocess.run(["nvidia-smi"], stdout=subprocess.PIPE, text=True)
+                results["nvidia_smi_output"] = nvidia_smi.stdout
+            except:
+                results["nvidia_smi_output"] = "nvidia-smi not available or failed"
+
+            # Test CUDA with a simple operation
+            if results["cuda_available"]:
+                try:
+                    x = torch.cuda.FloatTensor([1.0, 2.0])
+                    y = x + x
+                    results["cuda_test"] = "Success"
+                    del x, y  # Clean up
+                except Exception as e:
+                    results["cuda_test"] = f"Failed: {str(e)}"
+
+            logger.info(f"GPU Diagnostics: {results}")
+            return results
+        except Exception as e:
+            logger.error(f"Error running GPU diagnostics: {str(e)}")
+            return {"error": str(e)}
+    def _fallback_to_cpu(self, model_path):
+        """Fall back to CPU-only mode with optimized settings"""
+        try:
+            from llama_cpp import Llama
+            import os
+
+            # Get available CPU resources
+            cpu_count = os.cpu_count() or 4
+
+            logger.info(f"Falling back to CPU-only mode with {cpu_count} cores")
+
+            # Optimize for CPU usage
+            self.llm = Llama(
+                model_path=model_path,
+                n_ctx=2048,
+                n_batch=32,
+                n_threads=max(1, cpu_count - 1),  # Leave one core free for system
+                use_mlock=True,
+                seed=42,
+                verbose=False
+            )
+            self.llm_available = True
+            logger.info("LLM loaded successfully with CPU-only acceleration")
+            return True
+        except Exception as e:
+            logger.error(f"Error loading LLM with CPU fallback: {str(e)}")
+            self.llm_available = False
+            return False
 
     def _create_system_prompt(self, relevant_chunks):
         """
