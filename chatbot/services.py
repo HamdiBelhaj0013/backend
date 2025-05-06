@@ -5,7 +5,9 @@ from django.conf import settings
 from .models import Conversation, Message, DocumentChunk
 from .utils import find_relevant_chunks
 from .conversation_handlers import conversation_manager
-
+import re
+import numpy as np
+from .legal_knowledge import get_relevant_articles, get_legal_term_definitions  # Import from the new file
 logger = logging.getLogger(__name__)
 
 
@@ -252,25 +254,56 @@ class ChatbotService:
     def _create_system_prompt(self, relevant_chunks):
         """
         Create a system prompt with context from relevant document chunks
+        with improved legal context and article citation
         """
-        # Get content from chunks or use empty string if no chunks
-        chunks_text = "\n\n".join([chunk.content for chunk in relevant_chunks]) if relevant_chunks else ""
+        # Extract article numbers from chunks
+        import re
+        articles_cited = []
 
-        # Create a more comprehensive system prompt
-        return f"""Tu es un assistant IA convivial et serviable spécialisé dans la législation tunisienne sur les associations, basé sur le Décret-loi n° 2011-88 du 24 septembre 2011.
+        # Process chunks to highlight article references
+        processed_chunks = []
+        for chunk in relevant_chunks:
+            chunk_text = chunk.content
 
-CONTEXTE:
-{chunks_text}
+            # Find article numbers
+            article_match = re.search(r'Art\.\s+(\d+)', chunk_text)
+            if article_match:
+                article_num = article_match.group(1)
+                if article_num not in articles_cited:
+                    articles_cited.append(article_num)
 
-INSTRUCTIONS:
-1. Réponds toujours en français sauf si explicitement demandé autrement.
-2. Sois amical, patient et serviable dans tes réponses.
-3. Si la réponse se trouve dans le contexte fourni, utilise cette information.
-4. Si la question est hors sujet, explique poliment que tu es spécialisé dans la législation tunisienne sur les associations.
-5. Si la réponse n'est pas dans les extraits ou si tu n'es pas sûr, dis-le clairement sans inventer d'informations.
-6. Tu peux répondre à des questions générales et participer à des conversations normales en plus des questions spécifiques sur les associations.
-7. Sois précis, professionnel et concis dans tes réponses.
-8. Cite les articles pertinents du décret-loi quand c'est approprié."""
+                # Highlight article reference
+                processed_chunk = f"Extrait de l'Article {article_num} du décret-loi n° 2011-88:\n{chunk_text}"
+                processed_chunks.append(processed_chunk)
+            else:
+                processed_chunks.append(chunk_text)
+
+        # Join processed chunks
+        chunks_text = "\n\n".join(processed_chunks)
+
+        # Create article reference guide
+        article_guide = ""
+        if articles_cited:
+            article_guide = "Articles pertinents du décret-loi n° 2011-88 pour cette question: " + ", ".join(
+                [f"Article {art}" for art in articles_cited])
+
+        # Create enhanced system prompt
+        return f"""Tu es un assistant juridique spécialisé dans la législation tunisienne sur les associations, basé sur le Décret-loi n° 2011-88 du 24 septembre 2011.
+
+    CONTEXTE JURIDIQUE:
+    {chunks_text}
+
+    {article_guide}
+
+    INSTRUCTIONS:
+    1. Réponds toujours en français sauf si explicitement demandé autrement.
+    2. Sois précis et cite spécifiquement les articles pertinents du décret-loi (exemple: "Selon l'Article 10...").
+    3. Organise ta réponse par points si la question touche à plusieurs aspects.
+    4. Si la réponse se trouve dans le contexte fourni, utilise cette information en citant les articles correspondants.
+    5. Si la question est hors sujet, explique poliment que tu es spécialisé dans la législation tunisienne sur les associations.
+    6. Si la réponse n'est pas dans les extraits ou si tu n'es pas sûr, dis-le clairement sans inventer d'informations.
+    7. Structure ta réponse de manière logique pour faciliter la compréhension.
+    8. Utilise un langage juridique précis mais accessible."""
 
     def _get_conversation_history(self, conversation, max_messages=5):
         """
@@ -292,12 +325,28 @@ INSTRUCTIONS:
         return history
 
     def _generate_response_with_local_llm(self, query, relevant_chunks, conversation_history=None):
-        """Generate a response using GPU-accelerated LLM"""
+        """Generate a response using GPU-accelerated LLM with enhanced legal context"""
         if not self._load_model_if_needed():
             logger.warning("LLM not available, using fallback response")
             return self._generate_fallback_response(query)
 
         try:
+            # Get domain-specific context
+            relevant_articles = get_relevant_articles(query)
+            legal_terms = get_legal_term_definitions(query)
+
+            # Enhance chunk retrieval with domain knowledge
+            if relevant_articles and len(relevant_chunks) < 3:
+                # Try to find chunks containing relevant articles
+                for article in relevant_articles:
+                    article_chunks = DocumentChunk.objects.filter(content__contains=f"Art. {article}")
+                    if article_chunks.exists():
+                        # Add these chunks if they're not already in relevant_chunks
+                        for chunk in article_chunks:
+                            if chunk not in relevant_chunks:
+                                relevant_chunks = list(relevant_chunks) + [chunk]
+                                break  # Just add one chunk per article to avoid too much context
+
             # Sort chunks by relevance score
             # For this to work, modify find_relevant_chunks to return chunks with scores
 
@@ -305,8 +354,20 @@ INSTRUCTIONS:
             system_instruction = "Tu es un expert juridique spécialisé dans la législation tunisienne sur les associations."
             context_text = ""
 
+            # Add legal term definitions if relevant
+            if legal_terms:
+                context_text += "Définitions de termes juridiques pertinents:\n"
+                for term, definition in legal_terms.items():
+                    context_text += f"- {term}: {definition}\n"
+                context_text += "\n"
+
+            # Add relevant articles from domain knowledge
+            if relevant_articles:
+                context_text += f"Articles particulièrement pertinents pour cette question: {', '.join(['Article ' + art for art in relevant_articles])}\n\n"
+
             # Determine how many chunks we can use based on query length
-            max_chunk_tokens = 3500 - len(query)  # Reserve ~500 tokens for the system instruction and query
+            max_chunk_tokens = 3500 - len(query) - len(
+                context_text)  # Reserve tokens for the system instruction and query
             current_tokens = 0
             chunks_used = 0
 
@@ -317,7 +378,14 @@ INSTRUCTIONS:
                 if current_tokens + estimated_tokens > max_chunk_tokens:
                     break
 
-                context_text += f"\n\nExtrait du document '{chunk.document.title}':\n{chunk_text}"
+                # Highlight article references
+                article_match = re.search(r'Art\.\s+(\d+)', chunk_text)
+                if article_match:
+                    article_num = article_match.group(1)
+                    context_text += f"\n\nExtrait de l'Article {article_num} du décret-loi n° 2011-88:\n{chunk_text}"
+                else:
+                    context_text += f"\n\nExtrait du document '{chunk.document.title}':\n{chunk_text}"
+
                 current_tokens += estimated_tokens
                 chunks_used += 1
 
@@ -350,7 +418,11 @@ INSTRUCTIONS:
 
                 generated_text = response["choices"][0]["message"]["content"]
                 logger.info(f"Generated response with chat completion: {generated_text[:100]}...")
-                return generated_text.strip()
+
+                # Add citations to the response
+                final_response = self._add_article_citations(generated_text, relevant_chunks)
+
+                return final_response.strip()
 
             except Exception as e:
                 logger.error(f"Error with chat completion: {e}")
@@ -371,6 +443,51 @@ INSTRUCTIONS:
             logger.error(f"Error generating response with local LLM: {str(e)}")
             logger.error(traceback.format_exc())
             return self._generate_fallback_response(query)
+
+    def _add_article_citations(self, response, relevant_chunks):
+        """Add proper article citations to response text"""
+        import re
+
+        # Extract article numbers from chunks
+        article_references = {}
+        for chunk in relevant_chunks:
+            article_match = re.search(r'Art\.\s+(\d+)', chunk.content)
+            if article_match:
+                article_num = article_match.group(1)
+                article_references[article_num] = chunk.content
+
+        # If no article references found, return the original response
+        if not article_references:
+            return response
+
+        # Look for mentions of articles without proper citation
+        sentences = re.split(r'(?<=[.!?])\s+', response)
+        cited_response = []
+
+        for sentence in sentences:
+            # Check if sentence already contains a proper citation
+            if re.search(r'article\s+\d+\s+du décret-loi', sentence.lower()):
+                cited_response.append(sentence)
+                continue
+
+            # Look for article mentions
+            article_mention = re.search(r'article\s+(\d+)', sentence.lower())
+            if article_mention:
+                article_num = article_mention.group(1)
+                if article_num in article_references:
+                    # Add full citation if not already present
+                    if "décret-loi" not in sentence.lower():
+                        cited_sentence = sentence.replace(f"article {article_num}",
+                                                          f"article {article_num} du décret-loi n° 2011-88")
+                        cited_response.append(cited_sentence)
+                    else:
+                        cited_response.append(sentence)
+                else:
+                    cited_response.append(sentence)
+            else:
+                cited_response.append(sentence)
+
+        return " ".join(cited_response)
 
     def _generate_fallback_response(self, query):
         """
