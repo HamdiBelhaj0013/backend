@@ -5,10 +5,17 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import pandas as pd
+
 from .models import Document, DocumentChunk
 
-# Initialize a TF-IDF vectorizer instead of sentence-transformers
-vectorizer = TfidfVectorizer(lowercase=True, stop_words='english')
+# Initialize a TF-IDF vectorizer with French stopwords and better tokenization for legal text
+vectorizer = TfidfVectorizer(
+    lowercase=True,
+    stop_words=['le', 'la', 'les', 'un', 'une', 'des', 'et', 'en', 'du', 'de', 'à', 'au', 'aux'],
+    ngram_range=(1, 2),  # Include bigrams for legal phrases
+    min_df=2,  # Minimum document frequency
+    max_df=0.85  # Maximum document frequency
+)
 document_vectors = None
 chunk_ids = []
 chunks_df = None
@@ -16,13 +23,14 @@ chunks_df = None
 
 def extract_text_from_pdf(pdf_path):
     """
-    Extract text from a PDF file
+    Extract text from a PDF file with improved formatting preservation
     """
     text = ""
     try:
         doc = fitz.open(pdf_path)
         for page in doc:
-            text += page.get_text()
+            # Extract text with better layout preservation
+            text += page.get_text("text")  # Use text mode for better layout
         doc.close()
         return text
     except Exception as e:
@@ -30,15 +38,15 @@ def extract_text_from_pdf(pdf_path):
         return text
 
 
-def chunk_text(text, chunk_size=500, chunk_overlap=50):
+def chunk_text(text, chunk_size=500, chunk_overlap=100):
     """
-    Split text into smaller chunks with article awareness for legal documents
+    Split text into smaller chunks with enhanced article awareness for legal documents
     """
     # Try to identify article boundaries for legal documents
     import re
 
-    # Check if the document appears to be structured with articles
-    article_pattern = r'Art\.\s+\d+\s+-'
+    # More robust pattern for French legal texts
+    article_pattern = r'Art\.\s+\d+\s+-|Article\s+\d+\s*[-:]'
     articles = re.split(article_pattern, text)
 
     # If we found clear article boundaries and there are at least a few articles
@@ -47,7 +55,11 @@ def chunk_text(text, chunk_size=500, chunk_overlap=50):
 
         # Process each article
         for i in range(1, len(articles)):
-            article_text = f"Art. {i} - {articles[i]}"
+            # Extract article number from the original text
+            match = re.search(r'Art\.\s+(\d+)|Article\s+(\d+)', text)
+            article_num = match.group(1) if match and match.group(1) else str(i)
+
+            article_text = f"Art. {article_num} - {articles[i]}"
 
             # If article is very long, further chunk it while preserving context
             if len(article_text) > chunk_size * 1.5:
@@ -56,14 +68,19 @@ def chunk_text(text, chunk_size=500, chunk_overlap=50):
                 while start < len(article_text):
                     end = min(start + chunk_size, len(article_text))
                     if end < len(article_text) and article_text[end] != ' ':
-                        # Try to find a space to break on
-                        next_space = article_text.find(' ', end)
-                        if next_space != -1 and next_space - end < 50:  # Don't go too far
-                            end = next_space
+                        # Try to find a sentence boundary to break on
+                        sentence_end = max(
+                            article_text.rfind('. ', start, end),
+                            article_text.rfind('? ', start, end),
+                            article_text.rfind('! ', start, end),
+                            article_text.rfind('.\n', start, end)
+                        )
+                        if sentence_end != -1 and sentence_end > start + 100:  # Ensure minimum chunk size
+                            end = sentence_end + 1
 
                     # Always include article number in each chunk for context
                     if start > 0:
-                        article_prefix = re.search(r'Art\.\s+\d+\s+-', article_text).group(0)
+                        article_prefix = f"Art. {article_num}"
                         sub_chunks.append(f"{article_prefix} (suite) {article_text[start:end]}")
                     else:
                         sub_chunks.append(article_text[start:end])
@@ -82,15 +99,21 @@ def chunk_text(text, chunk_size=500, chunk_overlap=50):
     while start < len(text):
         end = min(start + chunk_size, len(text))
         if end < len(text) and text[end] != ' ':
-            # Try to find a space to break on
-            next_space = text.find(' ', end)
-            if next_space != -1 and next_space - end < 50:  # Don't go too far
-                end = next_space
+            # Try to find a sentence boundary to break on
+            sentence_end = max(
+                text.rfind('. ', start, end),
+                text.rfind('? ', start, end),
+                text.rfind('! ', start, end),
+                text.rfind('.\n', start, end)
+            )
+            if sentence_end != -1 and sentence_end > start + 100:  # Ensure minimum chunk size
+                end = sentence_end + 1
 
         chunks.append(text[start:end])
         start = end - chunk_overlap
 
     return chunks
+
 
 def store_document_and_chunks(title, text, file_path=None, language='fr'):
     """
@@ -122,6 +145,9 @@ def store_document_and_chunks(title, text, file_path=None, language='fr'):
             chunk_id=chunk_id
         )
         stored_chunks.append(chunk_obj)
+
+    # Rebuild the TF-IDF index after adding new document
+    setup_tfidf_index()
 
     return document
 
@@ -162,8 +188,8 @@ def setup_semantic_model():
     """
     try:
         from sentence_transformers import SentenceTransformer
-        # Use a multilingual model since we're working with French text
-        model = SentenceTransformer('distiluse-base-multilingual-cased-v1')
+        # Use a multilingual model optimized for French and legal text
+        model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
         return model
     except ImportError:
         print("Error: sentence-transformers not installed. Run: pip install sentence-transformers")
@@ -209,10 +235,41 @@ def create_semantic_embeddings():
     return embeddings
 
 
+def expand_query_with_terms(query):
+    """
+    Expand query with legal terminology to improve search relevance
+    """
+    # Map common terms to legal terminology
+    legal_term_map = {
+        "créer": ["constitution", "création", "former"],
+        "statuts": ["règlement", "statut", "organisation"],
+        "financement": ["ressources", "financer", "budget", "cotisations"],
+        "dissolution": ["liquider", "dissoudre", "disparition"],
+        "membres": ["adhérents", "adhésion", "participation"],
+        "administration": ["bureau", "conseil", "gestion"],
+        "assemblée": ["réunion", "ag", "assemblée générale"]
+    }
+
+    expanded_terms = []
+    query_lower = query.lower()
+
+    # Add related terms if the original term appears in the query
+    for term, expansions in legal_term_map.items():
+        if term in query_lower:
+            expanded_terms.extend(expansions)
+
+    # Combine original query with expanded terms
+    if expanded_terms:
+        expanded_query = f"{query} {' '.join(expanded_terms)}"
+        return expanded_query
+
+    return query
+
+
 def find_relevant_chunks(query, top_k=5):
     """
     Find the most relevant document chunks for a given query using hybrid search
-    combining TF-IDF and semantic similarity
+    combining TF-IDF and semantic similarity with higher weight on document content
     """
     global document_vectors, chunk_ids, chunks_df, semantic_model, semantic_embeddings
 
@@ -224,12 +281,15 @@ def find_relevant_chunks(query, top_k=5):
     if document_vectors is None or chunks_df is None:
         return []
 
+    # Expand query with legal terminology
+    expanded_query = expand_query_with_terms(query)
+
     # Initialize results containers
     tfidf_scores = np.zeros(len(chunk_ids))
     semantic_scores = np.zeros(len(chunk_ids))
 
     # TF-IDF scoring
-    query_vector = vectorizer.transform([query])
+    query_vector = vectorizer.transform([expanded_query])
     tfidf_scores = cosine_similarity(query_vector, document_vectors).flatten()
 
     # Semantic scoring (if available)
@@ -250,11 +310,19 @@ def find_relevant_chunks(query, top_k=5):
                 if norm_query > 0 and norm_chunk > 0:
                     semantic_scores[i] = np.dot(query_embedding, chunk_embedding) / (norm_query * norm_chunk)
 
-    # Combine scores (0.4 weight to TF-IDF, 0.6 to semantic if available)
+    # Combine scores with higher weight (0.7) to TF-IDF (keyword matching) to prioritize document content
     if semantic_embeddings is not None:
-        combined_scores = 0.4 * tfidf_scores + 0.6 * semantic_scores
+        combined_scores = 0.7 * tfidf_scores + 0.3 * semantic_scores
     else:
         combined_scores = tfidf_scores
+
+    # Boost scores for chunks with article references
+    import re
+    for i, chunk_id in enumerate(chunk_ids):
+        chunk_content = chunks_df.loc[chunks_df['chunk_id'] == chunk_id, 'content'].iloc[0]
+        # Check if chunk contains article reference
+        if re.search(r'Art\.\s+\d+|Article\s+\d+', chunk_content):
+            combined_scores[i] *= 1.2  # Boost by 20%
 
     # Get top k indices
     top_indices = combined_scores.argsort()[-top_k:][::-1]
@@ -266,7 +334,11 @@ def find_relevant_chunks(query, top_k=5):
     relevant_chunks = DocumentChunk.objects.filter(chunk_id__in=relevant_chunk_ids)
 
     # Store the scores for each chunk to sort them later
-    chunks_with_scores = [(chunk, combined_scores[i]) for i, chunk in enumerate(relevant_chunks)]
+    chunks_with_scores = []
+    for chunk in relevant_chunks:
+        idx = chunk_ids.index(chunk.chunk_id)
+        chunks_with_scores.append((chunk, combined_scores[idx]))
+
     sorted_chunks = sorted(chunks_with_scores, key=lambda x: x[1], reverse=True)
 
     # Return only the chunks, not the scores
@@ -290,5 +362,8 @@ def process_policy_document(pdf_path):
 
     # Initialize the TF-IDF index
     setup_tfidf_index()
+
+    # Generate semantic embeddings
+    create_semantic_embeddings()
 
     return document

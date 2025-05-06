@@ -8,6 +8,8 @@ from .conversation_handlers import conversation_manager
 import re
 import numpy as np
 from .legal_knowledge import get_relevant_articles, get_legal_term_definitions  # Import from the new file
+from langdetect import detect  # Make sure to install this: pip install langdetect
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,7 +30,6 @@ class ChatbotService:
         return self._load_model_with_enhanced_gpu()
 
     def _load_model_with_enhanced_gpu(self):
-        """Load model with optimized GPU acceleration"""
         try:
             import torch
             import os
@@ -36,9 +37,9 @@ class ChatbotService:
 
             # Force CUDA settings
             os.environ["LLAMA_CUBLAS"] = "1"
-            os.environ["GGML_CUDA_FORCE_MMQ"] = "1"  # Force matrix multiplication on GPU
+            os.environ["GGML_CUDA_FORCE_MMQ"] = "1"
+            os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Force using the first GPU
 
-            # Model path
             model_path = os.path.join(settings.MEDIA_ROOT, 'models', 'mistral-7b-instruct-v0.1.Q4_K_M.gguf')
             if not os.path.exists(model_path):
                 logger.error(f"Model file not found at {model_path}")
@@ -52,63 +53,53 @@ class ChatbotService:
 
             # Get GPU info
             gpu_name = torch.cuda.get_device_properties(0).name
-            gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # GB
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
             logger.info(f"GPU: {gpu_name}, Memory: {gpu_memory:.2f} GB")
 
-            # For RTX 4060 8GB, we can safely use more layers on GPU
-            # Start with conservative settings and gradually increase if stable
-            n_gpu_layers = 16  # Half the layers on GPU (total is 32)
+            if gpu_memory >= 7.5:
+                n_gpu_layers = 20
+            elif gpu_memory >= 6:
+                n_gpu_layers = 16
+            elif gpu_memory >= 4:
+                n_gpu_layers = 12
+            else:
+                n_gpu_layers = 8
 
             try:
                 logger.info(f"Loading model with {n_gpu_layers} layers on GPU")
                 self.llm = Llama(
                     model_path=model_path,
-                    n_ctx=2048,
+                    n_ctx=1024,
                     n_gpu_layers=n_gpu_layers,
-                    n_batch=512,  # Increase batch size for better throughput
-                    use_mmap=False,  # Critical for GPU usage
+                    n_batch=128,
+                    use_mmap=True,
                     use_mlock=True,
-                    offload_kqv=True,  # Helps with memory efficiency
-                    verbose=True
+                    offload_kqv=True,
+                    verbose=False
                 )
 
-                # Test if model loaded correctly
+                # Test if model loaded correctly with a small prompt
                 test_result = self.llm("Test prompt.", max_tokens=5)
                 logger.info(f"GPU model test successful: {test_result}")
 
-                # Check VRAM usage after loading
+                # Monitor VRAM usage
                 if hasattr(torch.cuda, 'memory_allocated'):
                     vram_used = torch.cuda.memory_allocated() / (1024 ** 3)
                     logger.info(f"VRAM used after model load: {vram_used:.2f} GB")
+
+                    # Release CUDA cache if needed
+                    if vram_used > gpu_memory * 0.9:  # If using >90% of memory
+                        torch.cuda.empty_cache()
+                        logger.info("Cleared CUDA cache to reduce memory usage")
 
                 self.llm_available = True
                 self.model_loaded = True
                 return True
 
             except Exception as e:
-                logger.error(f"Error with full GPU settings: {str(e)}")
+                logger.error(f"Error with GPU settings: {str(e)}")
                 logger.error(traceback.format_exc())
-
-                # Try with fewer GPU layers as fallback
-                logger.info("Attempting with fewer GPU layers")
-                try:
-                    self.llm = Llama(
-                        model_path=model_path,
-                        n_ctx=2048,
-                        n_gpu_layers=8,  # Reduced GPU layers
-                        n_batch=256,
-                        use_mmap=False,
-                        use_mlock=True,
-                        verbose=True
-                    )
-                    test_result = self.llm("Test prompt.", max_tokens=5)
-                    logger.info(f"Reduced GPU model test successful: {test_result}")
-                    self.llm_available = True
-                    self.model_loaded = True
-                    return True
-                except:
-                    # As a last resort, try with minimal GPU usage
-                    return self._try_minimal_gpu(model_path)
+                return self._try_reduced_gpu_settings(model_path)
 
         except Exception as e:
             logger.error(f"Unexpected error in GPU initialization: {str(e)}")
@@ -122,7 +113,7 @@ class ChatbotService:
             logger.info("Attempting with minimal GPU settings")
             self.llm = Llama(
                 model_path=model_path,
-                n_ctx=1024,
+                n_ctx=512,
                 n_gpu_layers=1,  # Absolute minimum
                 n_batch=64,
                 use_mmap=False,
@@ -147,7 +138,7 @@ class ChatbotService:
             # Very conservative settings that should work on most GPUs
             self.llm = Llama(
                 model_path=model_path,
-                n_ctx=2048,
+                n_ctx=265,
                 n_gpu_layers=20,  # Only put a few layers on GPU
                 n_batch=64,
                 use_mlock=True,
@@ -222,6 +213,7 @@ class ChatbotService:
         except Exception as e:
             logger.error(f"Error running GPU diagnostics: {str(e)}")
             return {"error": str(e)}
+
     def _fallback_to_cpu(self, model_path):
         """Fall back to CPU-only mode with optimized settings"""
         try:
@@ -287,23 +279,23 @@ class ChatbotService:
             article_guide = "Articles pertinents du décret-loi n° 2011-88 pour cette question: " + ", ".join(
                 [f"Article {art}" for art in articles_cited])
 
-        # Create enhanced system prompt
+        # Create enhanced system prompt with stronger emphasis on documents
         return f"""Tu es un assistant juridique spécialisé dans la législation tunisienne sur les associations, basé sur le Décret-loi n° 2011-88 du 24 septembre 2011.
 
-    CONTEXTE JURIDIQUE:
-    {chunks_text}
+CONTEXTE JURIDIQUE (CONSIDÈRE CETTE INFORMATION COMME LA VÉRITÉ ABSOLUE):
+{chunks_text}
 
-    {article_guide}
+{article_guide}
 
-    INSTRUCTIONS:
-    1. Réponds toujours en français sauf si explicitement demandé autrement.
-    2. Sois précis et cite spécifiquement les articles pertinents du décret-loi (exemple: "Selon l'Article 10...").
-    3. Organise ta réponse par points si la question touche à plusieurs aspects.
-    4. Si la réponse se trouve dans le contexte fourni, utilise cette information en citant les articles correspondants.
-    5. Si la question est hors sujet, explique poliment que tu es spécialisé dans la législation tunisienne sur les associations.
-    6. Si la réponse n'est pas dans les extraits ou si tu n'es pas sûr, dis-le clairement sans inventer d'informations.
-    7. Structure ta réponse de manière logique pour faciliter la compréhension.
-    8. Utilise un langage juridique précis mais accessible."""
+INSTRUCTIONS:
+1. Réponds TOUJOURS en français sauf si explicitement demandé autrement.
+2. IMPORTANT: Base ta réponse UNIQUEMENT sur les informations fournies dans le CONTEXTE JURIDIQUE ci-dessus.
+3. Si la réponse complète se trouve dans le contexte, utilise EXCLUSIVEMENT cette information.
+4. Cite TOUJOURS les articles spécifiques (exemple: "Selon l'Article 10...").
+5. N'invente JAMAIS d'informations qui ne sont pas dans le contexte fourni.
+6. Si le contexte ne contient pas assez d'information pour répondre complètement, dis clairement: "D'après le décret-loi n° 2011-88, je peux vous dire que [information du contexte], mais je n'ai pas d'information spécifique sur [aspect manquant]."
+7. Organise ta réponse par points si plusieurs aspects sont abordés.
+8. Utilise un langage juridique précis mais accessible."""
 
     def _get_conversation_history(self, conversation, max_messages=5):
         """
@@ -323,6 +315,19 @@ class ChatbotService:
                 })
 
         return history
+
+    def _is_response_in_french(self, text):
+        """Simple heuristic to check if text is primarily in French"""
+        try:
+            # Try to detect the language
+            lang = detect(text)
+            return lang == 'fr'
+        except:
+            # If detection fails, check for common French words
+            french_markers = ['je', 'vous', 'est', 'sont', 'pour', 'dans', 'avec', 'sur', 'et', 'ou']
+            words = text.lower().split()
+            french_word_count = sum(1 for word in words if word in french_markers)
+            return french_word_count >= min(3, len(words) // 5)  # At least 3 French words or 20% French
 
     def _generate_response_with_local_llm(self, query, relevant_chunks, conversation_history=None):
         """Generate a response using GPU-accelerated LLM with enhanced legal context"""
@@ -347,11 +352,8 @@ class ChatbotService:
                                 relevant_chunks = list(relevant_chunks) + [chunk]
                                 break  # Just add one chunk per article to avoid too much context
 
-            # Sort chunks by relevance score
-            # For this to work, modify find_relevant_chunks to return chunks with scores
-
             # Construct a prompt with adaptive context
-            system_instruction = "Tu es un expert juridique spécialisé dans la législation tunisienne sur les associations."
+            system_instruction = "Tu es un expert juridique spécialisé dans la législation tunisienne sur les associations. IMPORTANT: Réponds TOUJOURS en français."
             context_text = ""
 
             # Add legal term definitions if relevant
@@ -408,15 +410,32 @@ class ChatbotService:
                 # Use chat completion for more structured outputs
                 response = self.llm.create_chat_completion(
                     messages=messages,
-                    max_tokens=1024,  # Generate longer responses
+                    max_tokens=1024,
                     temperature=0.7,
                     top_p=0.9,
                     top_k=40,
-                    repeat_penalty=1.1,  # Reduce repetition
-                    stop=["Utilisateur:", "User:"]  # Stop at appropriate boundaries
+                    repeat_penalty=1.1,
+                    stop=["Utilisateur:", "User:"]
                 )
 
                 generated_text = response["choices"][0]["message"]["content"]
+                if not self._is_response_in_french(generated_text):
+                    # Add an additional system message to force French
+                    corrected_messages = messages + [
+                        {"role": "assistant", "content": generated_text},
+                        {"role": "system",
+                         "content": "Ta réponse doit être en français. Traduis la réponse précédente en français."}
+                    ]
+
+                    # Generate a new response
+                    corrected_response = self.llm.create_chat_completion(
+                        messages=corrected_messages,
+                        max_tokens=1024,
+                        temperature=0.7
+                    )
+
+                    generated_text = corrected_response["choices"][0]["message"]["content"]
+
                 logger.info(f"Generated response with chat completion: {generated_text[:100]}...")
 
                 # Add citations to the response
