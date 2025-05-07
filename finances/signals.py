@@ -1,9 +1,36 @@
 from django.db.models.signals import post_delete
 from django.db.models.signals import post_save, pre_save
-from django.dispatch import receiver
-from .models import Transaction, BudgetAllocation
+from .models import Transaction
 from .models import ForeignDonationReport
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from api.models import Project
+from .models import BudgetAllocation
 
+
+@receiver(post_save, sender=Project)
+def create_budget_allocation_for_new_project(sender, instance, created, **kwargs):
+    """
+    Create a budget allocation for a new project using the project's budget value
+    """
+    if created:  # Only run when a project is first created
+        try:
+            # Check if a budget allocation already exists for this project
+            existing_allocation = BudgetAllocation.objects.filter(project=instance).exists()
+
+            if not existing_allocation:
+                # Create a new budget allocation with the project's budget amount
+                allocation = BudgetAllocation.objects.create(
+                    project=instance,
+                    allocated_amount=instance.budget,
+                    used_amount=0,
+                    notes=f"Budet de projet {instance.name}",
+                    # Set association if available on the project
+                    association=instance.association if hasattr(instance, 'association') else None
+                )
+                print(f"Created budget allocation of {allocation.allocated_amount} for project {instance.name}")
+        except Exception as e:
+            print(f"Error creating budget allocation for project {instance.id}: {str(e)}")
 @receiver(post_save, sender=Transaction)
 def update_budget_after_transaction_verification(sender, instance, created, **kwargs):
     """
