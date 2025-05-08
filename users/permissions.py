@@ -2,18 +2,15 @@ from django.http import Http404
 from rest_framework.permissions import BasePermission
 
 
-# Add a custom permission type for user validation
 class PermissionType:
     VIEW = 'view'
     CREATE = 'create'
     EDIT = 'edit'
     DELETE = 'delete'
     FULL_ACCESS = 'full_access'
-    VALIDATE_USER = 'validate_user'  # New permission type
+    VALIDATE_USER = 'validate_user'
 
 
-# Updated permission mapping to include validate_user permission
-# Updated permission mapping to include validate_user permission
 ROLE_PERMISSIONS = {
     'president': {
         'projects': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
@@ -71,31 +68,20 @@ ROLE_PERMISSIONS = {
 }
 
 def has_permission(user, resource_type, permission_type):
-    """
-    Check if a user has a specific permission for a resource
 
-    Args:
-        user: Django user object
-        resource_type: Type of resource (projects, members, etc.)
-        permission_type: Type of permission (view, create, edit, delete)
 
-    Returns:
-        Boolean indicating if user has permission
-    """
-    # Superusers have all permissions
     if user.is_superuser:
         return True
 
-    # If user has no role, deny permission
+
     if not hasattr(user, 'role') or user.role is None:
         return False
 
     role_name = user.role.name
 
-    # Get permissions for this role and resource
+
     resource_permissions = ROLE_PERMISSIONS.get(role_name, {}).get(resource_type, [])
 
-    # Check if the permission is in the list or if FULL_ACCESS is granted
     return permission_type in resource_permissions or PermissionType.FULL_ACCESS in resource_permissions
 
 

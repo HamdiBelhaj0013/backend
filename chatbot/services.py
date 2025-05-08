@@ -69,7 +69,7 @@ class ChatbotService:
                 logger.info(f"Loading model with {n_gpu_layers} layers on GPU")
                 self.llm = Llama(
                     model_path=model_path,
-                    n_ctx=1024,
+                    n_ctx=2048,
                     n_gpu_layers=n_gpu_layers,
                     n_batch=128,
                     use_mmap=True,
@@ -113,7 +113,7 @@ class ChatbotService:
             logger.info("Attempting with minimal GPU settings")
             self.llm = Llama(
                 model_path=model_path,
-                n_ctx=512,
+                n_ctx=1024,
                 n_gpu_layers=1,  # Absolute minimum
                 n_batch=64,
                 use_mmap=False,
@@ -138,7 +138,7 @@ class ChatbotService:
             # Very conservative settings that should work on most GPUs
             self.llm = Llama(
                 model_path=model_path,
-                n_ctx=265,
+                n_ctx=512,
                 n_gpu_layers=20,  # Only put a few layers on GPU
                 n_batch=64,
                 use_mlock=True,
