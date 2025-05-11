@@ -15,7 +15,7 @@ ROLE_PERMISSIONS = {
     'president': {
         'projects': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'members': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE,
-                    PermissionType.VALIDATE_USER],  # Added validate_user
+                    PermissionType.VALIDATE_USER],
         'finance': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'tasks': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'meetings': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
@@ -24,24 +24,26 @@ ROLE_PERMISSIONS = {
         'notifications': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
     },
     'treasurer': {
-        'projects': [PermissionType.VIEW],
-        'members': [PermissionType.VIEW, PermissionType.VALIDATE_USER],  # Added validate_user
+        'projects': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'members': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE,
+                   PermissionType.VALIDATE_USER],
         'finance': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
-        'tasks': [PermissionType.VIEW],
-        'meetings': [PermissionType.VIEW, PermissionType.CREATE],
-        'reports': [PermissionType.VIEW, PermissionType.CREATE],
-        'chatbot': [PermissionType.VIEW],
-        'notifications': [PermissionType.VIEW, PermissionType.CREATE],
-    },
-    'secretary': {
-        'projects': [PermissionType.VIEW],
-        'members': [PermissionType.VIEW, PermissionType.VALIDATE_USER],  # Added validate_user
-        'finance': [PermissionType.VIEW],
         'tasks': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'meetings': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'reports': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
         'chatbot': [PermissionType.VIEW],
-        'notifications': [PermissionType.VIEW],
+        'notifications': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+    },
+    'secretary': {
+        'projects': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'members': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE,
+                   PermissionType.VALIDATE_USER],
+        'finance': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'tasks': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'meetings': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'reports': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
+        'chatbot': [PermissionType.VIEW],
+        'notifications': [PermissionType.VIEW, PermissionType.CREATE, PermissionType.EDIT, PermissionType.DELETE],
     },
     'member': {
         'projects': [PermissionType.VIEW],

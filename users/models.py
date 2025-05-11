@@ -12,7 +12,7 @@ class CustomUserManager(BaseUserManager):
         if not email:
             raise ValueError('Email is a required field')
 
-        # Only require association for regular users, not superusers
+
         if not association and not extra_fields.get('is_superuser', False):
             raise ValueError('Association is a required field for regular users')
 

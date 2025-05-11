@@ -16,7 +16,7 @@ import time
 from pdf2image import convert_from_path
 import pytesseract
 
-# Set up logging
+
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('document_verification')
@@ -29,11 +29,11 @@ class OptimizedDocumentExtractor:
         """Initialize the optimized extractor with the best-performing settings"""
         self.debug_mode = debug_mode
 
-        # Optimized configuration based on region analysis
+
         self.config = {
             # Optimal regions based on comprehensive analysis
             'regions': [
-                # Primary region - optimized based on region finder analysis
+
                 {
                     'x_percent': 0.53,
                     'y_percent': 0.23,
@@ -55,7 +55,7 @@ class OptimizedDocumentExtractor:
                     'h_percent': 0.09
                 },
             ],
-            # Preprocessing strategies
+
             'preprocessing': [
                 # Standard preprocessing - works for most documents
                 {
@@ -83,31 +83,22 @@ class OptimizedDocumentExtractor:
             ],
             # OCR settings
             'ocr': {
-                'languages': 'ara+eng',  # Arabic and English languages
-                'psm_modes': [7, 8, 6, 4],  # From most to least specific
+                'languages': 'ara+eng',
+                'psm_modes': [7, 8, 6, 4],
                 'dpi': 300
             },
-            # ID patterns - update these patterns to match matricule fiscal format
+
             'patterns': [
-                r'(\d{7}[A-Z])',  # Standard format
-                r'(\d{7}[A-Za-z])',  # Allow lowercase letter (OCR might confuse case)
-                r'[N]?(\d{7}[A-Z])',  # Account for possible N prefix
-                r'(\d{7}[|l])',  # Account for OCR confusing I and l with 1
-                r'N?(\d{7}[A-Za-z])'  # More flexible pattern
+                r'(\d{7}[A-Z])',
+                r'(\d{7}[A-Za-z])',
+                r'[N]?(\d{7}[A-Z])',
+                r'(\d{7}[|l])',
+                r'N?(\d{7}[A-Za-z])'
             ]
         }
 
     def extract_from_document(self, pdf_path, output_dir=None):
-        """
-        Extract identifier from a document using optimized approach
 
-        Args:
-            pdf_path: Path to the PDF file
-            output_dir: Optional directory for debug output
-
-        Returns:
-            Dictionary with extraction results
-        """
         try:
             start_time = time.time()
 
@@ -123,25 +114,25 @@ class OptimizedDocumentExtractor:
             images = convert_from_path(pdf_path, dpi=self.config['ocr']['dpi'])
             image = np.array(images[0])
 
-            # Get dimensions
+
             height, width = image.shape[:2]
 
-            # Results collection
+
             all_results = []
             confidence_map = {}
 
-            # Process each region with different preprocessing methods
+
             for region_idx, region in enumerate(self.config['regions']):
-                # Calculate coordinates
+
                 x = int(width * region['x_percent'])
                 y = int(height * region['y_percent'])
                 w = int(width * region['w_percent'])
                 h = int(height * region['h_percent'])
 
-                # Extract region of interest
+
                 roi = image[y:y + h, x:x + w]
 
-                # Save debug visualization if requested
+
                 if debug_dir:
                     self._save_region_visualization(image, x, y, w, h, debug_dir, f"region_{region_idx}")
 
@@ -156,24 +147,20 @@ class OptimizedDocumentExtractor:
                             processed_roi
                         )
 
-                    # Try each OCR mode
+
                     for psm_mode in self.config['ocr']['psm_modes']:
-                        # Skip some combinations for efficiency
-                        # For non-primary regions, use fewer PSM modes
                         if region_idx > 1 and psm_mode not in [7, 6]:
                             continue
 
                         region_results = self._process_with_ocr(processed_roi, psm_mode, debug_dir,
                                                                 f"region_{region_idx}_preproc_{preproc['name']}_psm_{psm_mode}")
 
-                        # Track results
+
                         for result in region_results:
                             all_results.append(result)
                             confidence_map[result] = confidence_map.get(result, 0) + 1
 
-                        # If we found a result, we might stop early for efficiency
                         if region_results and region_idx == 0 and preproc_idx == 0 and psm_mode == 7:
-                            # Only stop if we have a high confidence result
                             if len(region_results) == 1:
                                 identifier = region_results[0]
                                 confidence = 100.0
@@ -186,7 +173,7 @@ class OptimizedDocumentExtractor:
                                     'filename': os.path.basename(pdf_path)
                                 }
 
-            # Determine final result based on confidence
+
             identifier = None
             confidence = 0
 
@@ -196,17 +183,17 @@ class OptimizedDocumentExtractor:
                 for result in all_results:
                     result_counts[result] = result_counts.get(result, 0) + 1
 
-                # Get the most frequent result
+
                 max_count = 0
                 for result, count in result_counts.items():
                     if count > max_count:
                         max_count = count
                         identifier = result
 
-                # Calculate confidence
+
                 confidence = (max_count / len(all_results)) * 100
 
-            # Calculate processing time
+
             elapsed_time = time.time() - start_time
 
             return {
@@ -516,14 +503,13 @@ def calculate_similarity(str1, str2):
 
     # Normalize strings to handle common OCR errors
     def normalize(s):
-        # Replace common OCR error characters
         replacements = {
-            'l': '1', 'I': '1', '|': '1',  # Letter 'l' or 'I' confused with number '1'
-            'O': '0', 'o': '0',  # Letter 'O' confused with number '0'
-            'S': '5', 's': '5',  # Letter 'S' confused with number '5'
-            'Z': '2', 'z': '2',  # Letter 'Z' confused with number '2'
-            'G': '6', 'g': '6',  # Letter 'G' confused with number '6'
-            'B': '8', 'b': '8'  # Letter 'B' confused with number '8'
+            'l': '1', 'I': '1', '|': '1',
+            'O': '0', 'o': '0',
+            'S': '5', 's': '5',
+            'Z': '2', 'z': '2',
+            'G': '6', 'g': '6',
+            'B': '8', 'b': '8'
         }
 
         result = ''
@@ -532,11 +518,11 @@ def calculate_similarity(str1, str2):
 
         return result.upper()  # Convert to uppercase for case-insensitive comparison
 
-    # Normalize strings
+
     norm1 = normalize(str1)
     norm2 = normalize(str2)
 
-    # Calculate Levenshtein distance (edit distance)
+
     def levenshtein(s1, s2):
         if len(s1) < len(s2):
             return levenshtein(s2, s1)
@@ -557,7 +543,6 @@ def calculate_similarity(str1, str2):
 
         return previous_row[-1]
 
-    # Calculate similarity as 1 - normalized distance
     max_len = max(len(norm1), len(norm2))
     if max_len == 0:
         return 1.0  # Both strings are empty

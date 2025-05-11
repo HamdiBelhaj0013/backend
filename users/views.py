@@ -165,14 +165,13 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                 president_user.save()
                 print(f"Existing president user validated")
 
-            # Create or update corresponding Member object
             try:
                 member, member_created = Member.objects.get_or_create(
                     email=association.president_email,
                     defaults={
                         'name': president_name,
-                        'address': "Please update your address",
-                        'nationality': "Please update your nationality",
+                        'address': "Modifier Votre adresse",
+                        'nationality': "Mettre a jour Votre nationalité",
                         'birth_date': default_birth_date,
                         'job': "Association President",
                         'joining_date': today,
@@ -212,8 +211,8 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                     'association': association,
                     'full_name': treasurer_name,
                     'role': treasurer_role,
-                    'is_validated': True,  # Set to True by default
-                    'validation_date': current_time  # Set validation date
+                    'is_validated': True,
+                    'validation_date': current_time
                 }
             )
 
@@ -236,8 +235,8 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                     email=association.treasurer_email,
                     defaults={
                         'name': treasurer_name,
-                        'address': "Please update your address",
-                        'nationality': "Please update your nationality",
+                        'address': "Mettre a jour votre addresse",
+                        'nationality': "Mettre a jour votre nationalité",
                         'birth_date': default_birth_date,
                         'job': "Association Treasurer",
                         'joining_date': today,
@@ -300,8 +299,8 @@ class AssociationAccountViewSet(viewsets.ModelViewSet):
                     email=association.secretary_email,
                     defaults={
                         'name': secretary_name,
-                        'address': "Please update your address",
-                        'nationality': "Please update your nationality",
+                        'address': "Mettre a jour votre addresse",
+                        'nationality': "Mettre a jour votre nationalité",
                         'birth_date': default_birth_date,
                         'job': "Association Secretary",
                         'joining_date': today,
@@ -720,8 +719,8 @@ class RegisterViewset(viewsets.ViewSet):
                     member = Member(
                         email=association.president_email,
                         name=president_name,
-                        address="Please update your address",
-                        nationality="Please update your nationality",
+                        address="Mettre a jour votre addresse",
+                        nationality="Mettre a jour votre nationalité",
                         birth_date=default_birth_date,
                         job="Association President",
                         joining_date=today,
@@ -794,8 +793,8 @@ class RegisterViewset(viewsets.ViewSet):
                     member = Member(
                         email=association.treasurer_email,
                         name=treasurer_name,
-                        address="Please update your address",
-                        nationality="Please update your nationality",
+                        address="Mettre a jour votre addresse",
+                        nationality="Mettre a jour votre nationalité",
                         birth_date=default_birth_date,
                         job="Association Treasurer",
                         joining_date=today,
@@ -868,8 +867,8 @@ class RegisterViewset(viewsets.ViewSet):
                     member = Member(
                         email=association.secretary_email,
                         name=secretary_name,
-                        address="Please update your address",
-                        nationality="Please update your nationality",
+                        address="Mettre a jour votre addresse",
+                        nationality="Mettre a jour votre nationalité",
                         birth_date=default_birth_date,
                         job="Association Secretary",
                         joining_date=today,
@@ -1055,9 +1054,9 @@ class UserViewset(viewsets.ViewSet):
                         name=user_to_validate.full_name or user_to_validate.email,
                         cin=cin,
                         birth_date=birth_date,
-                        address="Please update your address",  # Placeholder
-                        nationality="Please update your nationality",  # Placeholder
-                        job="Please update your job",  # Placeholder
+                        address="Mettre a jour votre addresse",
+                        nationality="Mettre a jour votre nationalité",
+                        job="Mettre a jour votre Métier",
                         joining_date=today,
                         role="Membre",  # Default role for regular members
                         association=user_to_validate.association,

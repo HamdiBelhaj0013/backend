@@ -1,8 +1,3 @@
-"""
-Conversation handlers for more fluid chatbot interactions.
-This module extends the chatbot's capabilities beyond document-based responses.
-"""
-
 import random
 import re
 from datetime import datetime
@@ -142,17 +137,7 @@ class ConversationManager:
         return greeting
 
     def enhance_response(self, response, query, is_first_interaction=False):
-        """
-        Enhance the domain-specific response with conversational elements
 
-        Args:
-            response: The domain-specific response to enhance
-            query: The original query
-            is_first_interaction: Whether this is the first message in conversation
-
-        Returns:
-            An enhanced response with conversational elements
-        """
         enhanced_response = response
 
         # Add a greeting for the first interaction

@@ -1,10 +1,6 @@
 from rest_framework import viewsets
 class AssociationFilterMixin:
-    """
-    A mixin to filter querysets by the user's association
 
-    This ensures users can only access data from their own association
-    """
 
     def get_queryset(self):
         """Filter queryset based on user's association"""

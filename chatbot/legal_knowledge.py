@@ -1,8 +1,3 @@
-"""
-Legal domain knowledge for the Tunisian Association Law chatbot
-"""
-
-# Map of key legal concepts to relevant articles
 LEGAL_CONCEPTS = {
     "création": ["10", "11", "12"],
     "constitution": ["10", "11", "12"],
@@ -17,7 +12,7 @@ LEGAL_CONCEPTS = {
     "étrangères": ["20", "21", "22", "23", "24", "25"],
 }
 
-# Key legal terms with explanations
+
 LEGAL_TERMS = {
     "personnalité morale": "Capacité d'une association d'exercer des droits et des obligations distinctement de ses membres",
     "liquidateur": "Personne chargée de régler les affaires d'une association lors de sa dissolution",
