@@ -7,10 +7,25 @@ from .utils import find_relevant_chunks
 from .conversation_handlers import conversation_manager
 import re
 import numpy as np
-from .legal_knowledge import get_relevant_articles, get_legal_term_definitions  # Import from the new file
+from functools import lru_cache
+import torch
+from .legal_knowledge import get_relevant_articles, get_legal_term_definitions, LEGAL_TERMS
 from langdetect import detect  # Make sure to install this: pip install langdetect
-
+import time
 logger = logging.getLogger(__name__)
+
+# Create a singleton instance for the application
+_GLOBAL_CHATBOT_SERVICE = None
+
+
+def get_chatbot_service():
+    """Get or create the global chatbot service instance"""
+    global _GLOBAL_CHATBOT_SERVICE
+    if _GLOBAL_CHATBOT_SERVICE is None:
+        _GLOBAL_CHATBOT_SERVICE = ChatbotService()
+        # Pre-load the model at startup
+        _GLOBAL_CHATBOT_SERVICE._load_model_with_enhanced_gpu()
+    return _GLOBAL_CHATBOT_SERVICE
 
 
 class ChatbotService:
@@ -21,6 +36,7 @@ class ChatbotService:
         self.llm = None
         self.llm_available = False
         self.model_loaded = False
+        self.recent_queries_cache = {}  # Cache for storing recent query results
 
     def _load_model_if_needed(self):
         """Lazy-load the model with optimized GPU acceleration"""
@@ -56,26 +72,21 @@ class ChatbotService:
             gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
             logger.info(f"GPU: {gpu_name}, Memory: {gpu_memory:.2f} GB")
 
-            if gpu_memory >= 7.5:
-                n_gpu_layers = 20
-            elif gpu_memory >= 6:
-                n_gpu_layers = 16
-            elif gpu_memory >= 4:
-                n_gpu_layers = 12
-            else:
-                n_gpu_layers = 8
-
             try:
-                logger.info(f"Loading model with {n_gpu_layers} layers on GPU")
+                logger.info(f"Loading model with optimized settings on GPU")
+                # Enhanced model loading with optimized settings
                 self.llm = Llama(
                     model_path=model_path,
-                    n_ctx=2048,
-                    n_gpu_layers=n_gpu_layers,
-                    n_batch=128,
+                    n_ctx=4096,  # Double context window (was 2048)
+                    n_gpu_layers=-1,  # Use all available layers for max quality
+                    n_batch=512,  # Increased from 128 for better throughput
                     use_mmap=True,
                     use_mlock=True,
                     offload_kqv=True,
-                    verbose=False
+                    seed=42,  # Set consistent seed for more predictable outputs
+                    verbose=False,
+                    rope_freq_scale=0.5,  # Better handling of longer contexts
+                    rope_scaling_type=1  # Linear scaling for improved long-text reasoning
                 )
 
                 # Test if model loaded correctly with a small prompt
@@ -138,9 +149,9 @@ class ChatbotService:
             # Very conservative settings that should work on most GPUs
             self.llm = Llama(
                 model_path=model_path,
-                n_ctx=512,
+                n_ctx=2048,
                 n_gpu_layers=20,  # Only put a few layers on GPU
-                n_batch=64,
+                n_batch=128,
                 use_mlock=True,
                 offload_kqv=True,
                 seed=42,
@@ -279,23 +290,24 @@ class ChatbotService:
             article_guide = "Articles pertinents du décret-loi n° 2011-88 pour cette question: " + ", ".join(
                 [f"Article {art}" for art in articles_cited])
 
-        # Create enhanced system prompt with stronger emphasis on documents
-        return f"""Tu es un assistant juridique spécialisé dans la législation tunisienne sur les associations, basé sur le Décret-loi n° 2011-88 du 24 septembre 2011.
+        # Enhanced system prompt for better reasoning
+        return f"""Tu es un expert juridique spécialisé dans la législation tunisienne sur les associations, basé sur le Décret-loi n° 2011-88 du 24 septembre 2011.
 
 CONTEXTE JURIDIQUE (CONSIDÈRE CETTE INFORMATION COMME LA VÉRITÉ ABSOLUE):
 {chunks_text}
 
 {article_guide}
 
-INSTRUCTIONS:
-1. Réponds TOUJOURS en français sauf si explicitement demandé autrement.
-2. IMPORTANT: Base ta réponse UNIQUEMENT sur les informations fournies dans le CONTEXTE JURIDIQUE ci-dessus.
-3. Si la réponse complète se trouve dans le contexte, utilise EXCLUSIVEMENT cette information.
-4. Cite TOUJOURS les articles spécifiques (exemple: "Selon l'Article 10...").
+INSTRUCTIONS DE RÉPONSE:
+1. Réponds TOUJOURS en français avec un style formel et juridique approprié.
+2. Structure ta réponse de façon MÉTHODIQUE: d'abord établis les principes généraux, puis les détails spécifiques.
+3. Base ta réponse EXCLUSIVEMENT sur les informations fournies dans le CONTEXTE JURIDIQUE ci-dessus.
+4. Cite SYSTÉMATIQUEMENT les articles spécifiques (exemple: "Selon l'Article 10 du décret-loi n° 2011-88...").
 5. N'invente JAMAIS d'informations qui ne sont pas dans le contexte fourni.
-6. Si le contexte ne contient pas assez d'information pour répondre complètement, dis clairement: "D'après le décret-loi n° 2011-88, je peux vous dire que [information du contexte], mais je n'ai pas d'information spécifique sur [aspect manquant]."
-7. Organise ta réponse par points si plusieurs aspects sont abordés.
-8. Utilise un langage juridique précis mais accessible."""
+6. Utilise des PUCES ou NUMÉROS quand tu énumères plusieurs points ou exigences.
+7. Si le contexte ne contient pas assez d'information, dis clairement: "D'après le décret-loi n° 2011-88, je peux vous dire que [information du contexte], mais je n'ai pas d'information spécifique sur [aspect manquant]."
+8. Assure-toi que tes réponses soient COMPLÈTES et EXHAUSTIVES - prends ton temps pour explorer tous les aspects pertinents de la question.
+9. PRIORISE toujours la précision juridique, mais utilise un langage accessible."""
 
     def _get_conversation_history(self, conversation, max_messages=5):
         """
@@ -329,8 +341,51 @@ INSTRUCTIONS:
             french_word_count = sum(1 for word in words if word in french_markers)
             return french_word_count >= min(3, len(words) // 5)  # At least 3 French words or 20% French
 
+    # Utility for normalizing and hashing queries for caching
+    def _hash_query(self, query):
+        """Normalize query to enable caching"""
+        normalized = re.sub(r'\s+', ' ', query.lower().strip())
+        # Remove punctuation for better matching
+        normalized = re.sub(r'[,.?!;:]', '', normalized)
+        return normalized
+
+    # Function to prioritize chunks by relevance
+    def _prioritize_chunks(self, chunks, query):
+        """Score chunks by relevance, article presence, and information density"""
+        query_lower = query.lower()
+        scored_chunks = []
+
+        for chunk in chunks:
+            # Base score (assume it's stored in the chunk or use 1.0 as default)
+            base_score = getattr(chunk, 'similarity_score', 1.0)
+
+            # Boost for chunks containing articles
+            article_match = re.search(r'Art\.\s+(\d+)', chunk.content)
+            if article_match:
+                article_num = article_match.group(1)
+                # Extra boost if the article is mentioned in the query
+                if f"article {article_num}" in query_lower or f"art. {article_num}" in query_lower:
+                    base_score *= 1.5
+                else:
+                    base_score *= 1.2  # Regular boost for containing an article
+
+            # Boost information-dense chunks (more legal terms)
+            legal_term_count = sum(1 for term in LEGAL_TERMS if term in chunk.content.lower())
+            density_boost = 1 + (legal_term_count * 0.1)  # 10% boost per legal term
+            base_score *= density_boost
+
+            scored_chunks.append((chunk, base_score))
+
+        # Return chunks sorted by score
+        return [c[0] for c in sorted(scored_chunks, key=lambda x: x[1], reverse=True)]
+
+    @lru_cache(maxsize=100)
+    def _cached_find_relevant_chunks(self, query_hash, top_k=10):
+        """Cached wrapper around find_relevant_chunks"""
+        return find_relevant_chunks(query_hash, top_k)
+
     def _generate_response_with_local_llm(self, query, relevant_chunks, conversation_history=None):
-        """Generate a response using GPU-accelerated LLM with enhanced legal context"""
+        """Generate a response using optimized LLM with enhanced legal context"""
         if not self._load_model_if_needed():
             logger.warning("LLM not available, using fallback response")
             return self._generate_fallback_response(query)
@@ -352,6 +407,9 @@ INSTRUCTIONS:
                                 relevant_chunks = list(relevant_chunks) + [chunk]
                                 break  # Just add one chunk per article to avoid too much context
 
+            # Prioritize chunks by relevance
+            relevant_chunks = self._prioritize_chunks(relevant_chunks, query)
+
             # Construct a prompt with adaptive context
             system_instruction = "Tu es un expert juridique spécialisé dans la législation tunisienne sur les associations. IMPORTANT: Réponds TOUJOURS en français."
             context_text = ""
@@ -368,15 +426,15 @@ INSTRUCTIONS:
                 context_text += f"Articles particulièrement pertinents pour cette question: {', '.join(['Article ' + art for art in relevant_articles])}\n\n"
 
             # Determine how many chunks we can use based on query length
-            max_chunk_tokens = 3500 - len(query) - len(
-                context_text)  # Reserve tokens for the system instruction and query
+            # Increased token budget for more comprehensive context
+            max_chunk_tokens = 6000 - len(query) - len(context_text)
             current_tokens = 0
             chunks_used = 0
 
             for chunk in relevant_chunks:
                 chunk_text = chunk.content
-                # Rough token estimate (can be improved with a proper tokenizer)
-                estimated_tokens = len(chunk_text.split()) * 1.3
+                # Better token estimation using character count
+                estimated_tokens = len(chunk_text) / 4  # Approx. 4 chars per token
                 if current_tokens + estimated_tokens > max_chunk_tokens:
                     break
 
@@ -407,18 +465,25 @@ INSTRUCTIONS:
             messages.append({"role": "user", "content": query})
 
             try:
-                # Use chat completion for more structured outputs
+                # Use enhanced chat completion for more structured outputs
                 response = self.llm.create_chat_completion(
                     messages=messages,
-                    max_tokens=1024,
-                    temperature=0.7,
-                    top_p=0.9,
-                    top_k=40,
-                    repeat_penalty=1.1,
-                    stop=["Utilisateur:", "User:"]
+                    max_tokens=2048,  # Doubled from 1024 for more complete answers
+                    temperature=0.5,  # Reduced from 0.7 for more coherent outputs
+                    top_p=0.92,  # Slightly increased for better vocabulary
+                    top_k=50,  # Increased from 40 for richer language
+                    repeat_penalty=1.15,  # Increased to reduce repetition
+                    presence_penalty=0.2,  # New parameter for topic diversity
+                    frequency_penalty=0.2,  # New parameter to reduce word repetition
+                    stop=["Utilisateur:", "User:", "Question:"],
+                    mirostat_mode=2,  # Enable mirostat sampling for higher quality
+                    mirostat_tau=5.0,  # Conservative value for coherence
+                    mirostat_eta=0.1  # Learning rate for adaptive sampling
                 )
 
                 generated_text = response["choices"][0]["message"]["content"]
+
+                # Ensure response is in French
                 if not self._is_response_in_french(generated_text):
                     # Add an additional system message to force French
                     corrected_messages = messages + [
@@ -430,13 +495,17 @@ INSTRUCTIONS:
                     # Generate a new response
                     corrected_response = self.llm.create_chat_completion(
                         messages=corrected_messages,
-                        max_tokens=1024,
-                        temperature=0.7
+                        max_tokens=2048,
+                        temperature=0.5
                     )
 
                     generated_text = corrected_response["choices"][0]["message"]["content"]
 
                 logger.info(f"Generated response with chat completion: {generated_text[:100]}...")
+
+                # Clear CUDA cache after generation to free memory
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
                 # Add citations to the response
                 final_response = self._add_article_citations(generated_text, relevant_chunks)
@@ -450,8 +519,8 @@ INSTRUCTIONS:
 
                 output = self.llm(
                     minimal_prompt,
-                    max_tokens=768,
-                    temperature=0.7,
+                    max_tokens=1536,  # Increased from 768
+                    temperature=0.6,
                     top_p=0.9,
                     stop=["Question:"]
                 )
@@ -506,7 +575,12 @@ INSTRUCTIONS:
             else:
                 cited_response.append(sentence)
 
-        return " ".join(cited_response)
+        # Post-process to ensure consistent citation format
+        result = " ".join(cited_response)
+        # Standardize citation format
+        result = re.sub(r'article (\d+) du décret-loi', r'Article \1 du décret-loi', result, flags=re.IGNORECASE)
+
+        return result
 
     def _generate_fallback_response(self, query):
         """
@@ -560,6 +634,9 @@ INSTRUCTIONS:
         """
         Process a user message and generate a response with enhanced conversational abilities
         """
+        start_time = time.time()
+        logger.info(f"Processing message: {query[:100]}...")
+
         # Check if it's a purely conversational query first
         conversation_response, is_conversational = conversation_manager.handle_conversation(query, conversation)
 
@@ -585,15 +662,64 @@ INSTRUCTIONS:
                 conversation.title = new_title
                 conversation.save()
 
+            logger.info(f"Processed conversational message in {time.time() - start_time:.2f}s")
             return {
                 "message_id": assistant_message.id,
                 "content": conversation_response,
                 "relevant_documents": []
             }
 
+        # Check cache for similar recent queries
+        query_hash = self._hash_query(query)
+        if query_hash in self.recent_queries_cache:
+            cached_result = self.recent_queries_cache[query_hash]
+            logger.info(f"Using cached result for similar query")
+
+            # Still save messages to database for conversation history
+            user_message = Message.objects.create(
+                conversation=conversation,
+                role='user',
+                content=query
+            )
+
+            # Add relevant chunks from cache
+            user_message.relevant_document_chunks.set(cached_result['chunks'])
+
+            # Create assistant message with cached response
+            assistant_message = Message.objects.create(
+                conversation=conversation,
+                role='assistant',
+                content=cached_result['response']
+            )
+
+            # Add the relevant chunks to the assistant message as well
+            assistant_message.relevant_document_chunks.set(cached_result['chunks'])
+
+            # Update conversation title if needed
+            if conversation.title == "New Conversation" and len(conversation.messages.all()) <= 2:
+                new_title = query[:50] + "..." if len(query) > 50 else query
+                conversation.title = new_title
+                conversation.save()
+
+            return {
+                "message_id": assistant_message.id,
+                "content": cached_result['response'],
+                "relevant_documents": [
+                    {
+                        "title": chunk.document.title,
+                        "excerpt": chunk.content[:100] + "..." if len(chunk.content) > 100 else chunk.content
+                    }
+                    for chunk in cached_result['chunks']
+                ],
+                "cached": True
+            }
+
         # For non-conversational queries, proceed with document search
-        # Find relevant document chunks
-        relevant_chunks = find_relevant_chunks(query)
+        # Find relevant document chunks - get more chunks with optimized search
+        relevant_chunks = find_relevant_chunks(query, top_k=10)
+
+        # Prioritize chunks by relevance
+        relevant_chunks = self._prioritize_chunks(relevant_chunks, query)
 
         # Save the user message
         user_message = Message.objects.create(
@@ -636,6 +762,20 @@ INSTRUCTIONS:
             conversation.title = new_title
             conversation.save()
 
+        # Cache this result for similar future queries
+        # Limit cache size by removing oldest entries if needed
+        if len(self.recent_queries_cache) > 100:
+            # Remove oldest entry
+            oldest_key = next(iter(self.recent_queries_cache))
+            del self.recent_queries_cache[oldest_key]
+
+        # Add to cache
+        self.recent_queries_cache[query_hash] = {
+            'response': enhanced_response,
+            'chunks': relevant_chunks,
+            'timestamp': time.time()
+        }
+        logger.info(f"Processed message in {time.time() - start_time:.2f}s")
         return {
             "message_id": assistant_message.id,
             "content": enhanced_response,
@@ -644,6 +784,18 @@ INSTRUCTIONS:
                     "title": chunk.document.title,
                     "excerpt": chunk.content[:100] + "..." if len(chunk.content) > 100 else chunk.content
                 }
-                for chunk in relevant_chunks
+                for chunk in relevant_chunks[:5]  # Limit to top 5 for response
             ]
         }
+
+    def cleanup_resources(self):
+        """Clean up resources when shutting down"""
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Release the model
+        if self.llm:
+            del self.llm
+            self.llm = None
+            self.model_loaded = False
+            self.llm_available = False
