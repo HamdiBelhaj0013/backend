@@ -8,10 +8,11 @@ from .conversation_handlers import conversation_manager
 import re
 import numpy as np
 from functools import lru_cache
+import time
 import torch
 from .legal_knowledge import get_relevant_articles, get_legal_term_definitions, LEGAL_TERMS
-from langdetect import detect  # Make sure to install this: pip install langdetect
-import time
+from langdetect import detect
+
 logger = logging.getLogger(__name__)
 
 # Create a singleton instance for the application
@@ -37,6 +38,16 @@ class ChatbotService:
         self.llm_available = False
         self.model_loaded = False
         self.recent_queries_cache = {}  # Cache for storing recent query results
+
+        # Try to load sentence transformer for semantic similarity if available
+        try:
+            from sentence_transformers import SentenceTransformer
+            self.sentence_model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
+            self.semantic_model_available = True
+            logger.info("Sentence transformer model loaded successfully for semantic matching")
+        except:
+            self.semantic_model_available = False
+            logger.warning("Sentence transformer not available, falling back to keyword matching")
 
     def _load_model_if_needed(self):
         """Lazy-load the model with optimized GPU acceleration"""
@@ -255,76 +266,217 @@ class ChatbotService:
             return False
 
     def _create_system_prompt(self, relevant_chunks):
-        """
-        Create a system prompt with context from relevant document chunks
-        with improved legal context and article citation
-        """
-        # Extract article numbers from chunks
-        import re
+        """Create an enhanced system prompt with better legal context"""
+        # Extract article numbers and structure information better
         articles_cited = []
-
-        # Process chunks to highlight article references
         processed_chunks = []
+
         for chunk in relevant_chunks:
             chunk_text = chunk.content
-
-            # Find article numbers
             article_match = re.search(r'Art\.\s+(\d+)', chunk_text)
             if article_match:
                 article_num = article_match.group(1)
                 if article_num not in articles_cited:
                     articles_cited.append(article_num)
 
-                # Highlight article reference
-                processed_chunk = f"Extrait de l'Article {article_num} du décret-loi n° 2011-88:\n{chunk_text}"
+                # Highlight and structure the legal content
+                processed_chunk = f"Extrait de l'Article {article_num}:\n{chunk_text}"
                 processed_chunks.append(processed_chunk)
             else:
                 processed_chunks.append(chunk_text)
 
-        # Join processed chunks
+        # Create a more structured prompt with clear sections
         chunks_text = "\n\n".join(processed_chunks)
 
-        # Create article reference guide
+        # Add article reference guide
         article_guide = ""
         if articles_cited:
-            article_guide = "Articles pertinents du décret-loi n° 2011-88 pour cette question: " + ", ".join(
+            article_guide = "Articles pertinents du décret-loi n° 2011-88: " + ", ".join(
                 [f"Article {art}" for art in articles_cited])
 
-        # Enhanced system prompt for better reasoning
         return f"""Tu es un expert juridique spécialisé dans la législation tunisienne sur les associations, basé sur le Décret-loi n° 2011-88 du 24 septembre 2011.
 
-CONTEXTE JURIDIQUE (CONSIDÈRE CETTE INFORMATION COMME LA VÉRITÉ ABSOLUE):
+CONTEXTE JURIDIQUE (VÉRITÉ ABSOLUE):
 {chunks_text}
 
 {article_guide}
 
-INSTRUCTIONS DE RÉPONSE:
-1. Réponds TOUJOURS en français avec un style formel et juridique approprié.
-2. Structure ta réponse de façon MÉTHODIQUE: d'abord établis les principes généraux, puis les détails spécifiques.
-3. Base ta réponse EXCLUSIVEMENT sur les informations fournies dans le CONTEXTE JURIDIQUE ci-dessus.
-4. Cite SYSTÉMATIQUEMENT les articles spécifiques (exemple: "Selon l'Article 10 du décret-loi n° 2011-88...").
-5. N'invente JAMAIS d'informations qui ne sont pas dans le contexte fourni.
-6. Utilise des PUCES ou NUMÉROS quand tu énumères plusieurs points ou exigences.
-7. Si le contexte ne contient pas assez d'information, dis clairement: "D'après le décret-loi n° 2011-88, je peux vous dire que [information du contexte], mais je n'ai pas d'information spécifique sur [aspect manquant]."
-8. Assure-toi que tes réponses soient COMPLÈTES et EXHAUSTIVES - prends ton temps pour explorer tous les aspects pertinents de la question.
-9. PRIORISE toujours la précision juridique, mais utilise un langage accessible."""
+INSTRUCTIONS:
+1. Réponds TOUJOURS en français avec un style juridique clair et accessible.
+2. Structure ta réponse: d'abord les principes généraux, puis les détails spécifiques.
+3. Cite SYSTÉMATIQUEMENT les articles (ex: "Selon l'Article 10 du décret-loi n° 2011-88...").
+4. Utilise des PUCES ou NUMÉROS pour les listes d'exigences.
+5. Si l'information est incomplète, indique clairement ce que tu sais et ce qui manque.
+6. RAPPELLE-TOI DES QUESTIONS PRÉCÉDENTES quand tu réponds aux nouvelles questions.
+7. Si la réponse implique des articles spécifiques non mentionnés dans le contexte, indique: "D'autres articles du décret-loi peuvent contenir des informations supplémentaires."
+"""
 
-    def _get_conversation_history(self, conversation, max_messages=5):
-        """
-        Get recent conversation history limited to max_messages
-        """
+    def _extract_keywords(self, text):
+        """Extract important keywords from text, focused on legal terminology"""
+        # Convert to lowercase and tokenize
+        text_lower = text.lower()
+        words = re.findall(r'\b\w+\b', text_lower)
+
+        # Remove common French stopwords
+        stopwords = ['le', 'la', 'les', 'un', 'une', 'des', 'et', 'en', 'du',
+                     'de', 'à', 'au', 'aux', 'ce', 'ces', 'dans', 'par', 'pour',
+                     'sur', 'que', 'qui', 'quoi', 'comment', 'est', 'sont', 'être']
+        words = [word for word in words if word not in stopwords]
+
+        # Check for legal terminology from our legal_knowledge module
+        legal_keywords = []
+        for word in words:
+            if len(word) > 3:  # Only consider words with >3 characters
+                for concept in LEGAL_TERMS:
+                    if word in concept.lower():
+                        legal_keywords.append(word)
+                        break
+
+        # Add any domain-specific keywords not covered by LEGAL_TERMS
+        domain_keywords = ['association', 'décret', 'loi', 'statut', 'article', 'membre',
+                           'adhésion', 'financement', 'dissolution', 'création', 'constituer']
+
+        for word in words:
+            if word in domain_keywords and word not in legal_keywords:
+                legal_keywords.append(word)
+
+        # If we couldn't find any relevant keywords, just return original words
+        return legal_keywords if legal_keywords else words[:10]
+
+    def _semantic_similarity(self, text1, text2):
+        """Calculate semantic similarity between two texts"""
+        # If sentence transformer model is available, use it
+        if hasattr(self, 'semantic_model_available') and self.semantic_model_available:
+            try:
+                # Get embeddings
+                embedding1 = self.sentence_model.encode(text1)
+                embedding2 = self.sentence_model.encode(text2)
+
+                # Normalize vectors
+                norm1 = np.linalg.norm(embedding1)
+                norm2 = np.linalg.norm(embedding2)
+
+                if norm1 > 0 and norm2 > 0:
+                    # Calculate cosine similarity
+                    similarity = np.dot(embedding1, embedding2) / (norm1 * norm2)
+                    return float(similarity)
+                return 0.0
+            except Exception as e:
+                logger.error(f"Error calculating semantic similarity: {str(e)}")
+                return self._calculate_fallback_similarity(text1, text2)
+        else:
+            # Fall back to simpler method
+            return self._calculate_fallback_similarity(text1, text2)
+
+    def _calculate_fallback_similarity(self, text1, text2):
+        """Calculate text similarity using simple token overlap when semantic model unavailable"""
+        # Convert to lowercase and tokenize
+        tokens1 = set(re.findall(r'\b\w+\b', text1.lower()))
+        tokens2 = set(re.findall(r'\b\w+\b', text2.lower()))
+
+        # Calculate Jaccard similarity
+        intersection = tokens1.intersection(tokens2)
+        union = tokens1.union(tokens2)
+
+        if not union:
+            return 0.0
+
+        return len(intersection) / len(union)
+
+    def _calculate_similarity(self, query1, query2):
+        """Calculate similarity between two queries for caching purposes"""
+        # For cache comparisons, use a combination of exact match and semantic similarity
+        if query1 == query2:
+            return 1.0
+
+        # First check keywords
+        keywords1 = self._extract_keywords(query1)
+        keywords2 = self._extract_keywords(query2)
+
+        # Calculate keyword overlap (Jaccard similarity)
+        keyword_set1 = set(keywords1)
+        keyword_set2 = set(keywords2)
+        keyword_intersection = keyword_set1.intersection(keyword_set2)
+        keyword_union = keyword_set1.union(keyword_set2)
+
+        if not keyword_union:
+            return 0.0
+
+        keyword_similarity = len(keyword_intersection) / len(keyword_union)
+
+        # Add semantic similarity if available
+        if hasattr(self, 'semantic_model_available') and self.semantic_model_available:
+            semantic_sim = self._semantic_similarity(query1, query2)
+            # Weight: 60% semantic, 40% keyword
+            return 0.6 * semantic_sim + 0.4 * keyword_similarity
+        else:
+            return keyword_similarity
+
+    def _summarize_messages(self, messages):
+        """Summarize a sequence of conversation messages"""
+        if not messages:
+            return ""
+
+        # Extract content from messages
+        conversation_text = []
+        for msg in messages:
+            prefix = "User: " if msg.role == 'user' else "Assistant: "
+            conversation_text.append(f"{prefix}{msg.content}")
+
+        conversation_content = "\n".join(conversation_text)
+
+        # If we have the LLM loaded, use it for summarization
+        if self.llm_available:
+            try:
+                prompt = f"""Summarize this conversation history in 2-3 sentences, focusing on the main topics and questions:
+
+{conversation_content}
+
+Summary:"""
+
+                result = self.llm(prompt, max_tokens=150, temperature=0.3, stop=["User:", "Assistant:"])
+                summary = result['choices'][0]['text'].strip()
+
+                if summary:
+                    return summary
+            except Exception as e:
+                logger.error(f"Error summarizing messages with LLM: {str(e)}")
+
+        # Fallback - extract main topics from user messages
+        user_messages = [msg.content for msg in messages if msg.role == 'user']
+
+        # Simple extractive summary if LLM summarization failed
+        if len(user_messages) > 3:
+            return "Topics discussed: " + ", ".join(
+                [m[:50] + "..." if len(m) > 50 else m for m in user_messages[-3:]]
+            )
+        else:
+            return "Previous questions: " + "; ".join(
+                [m[:50] + "..." if len(m) > 50 else m for m in user_messages]
+            )
+
+    def _get_conversation_history(self, conversation, max_messages=8):
+        """Get expanded conversation history with context summarization"""
         messages = conversation.messages.order_by('created_at')
 
-        # Limit to last few messages to avoid context length issues
-        messages = messages[max(0, len(messages) - max_messages):]
+        # If conversation is long, include a summary of earlier messages
+        if len(messages) > max_messages:
+            earlier_messages = list(messages[:len(messages) - max_messages])
+            summary = self._summarize_messages(earlier_messages)
 
-        history = []
-        for msg in messages:
-            if msg.role != 'system':  # Skip system messages in the history
-                history.append({
-                    "role": msg.role,
-                    "content": msg.content
-                })
+            # Include both summary and recent messages
+            recent_messages = list(messages[len(messages) - max_messages:])
+
+            history = [{"role": "system", "content": f"Earlier conversation summary: {summary}"}]
+            for msg in recent_messages:
+                if msg.role != 'system':
+                    history.append({"role": msg.role, "content": msg.content})
+        else:
+            # For shorter conversations, include all messages
+            history = []
+            for msg in messages:
+                if msg.role != 'system':
+                    history.append({"role": msg.role, "content": msg.content})
 
         return history
 
@@ -341,43 +493,76 @@ INSTRUCTIONS DE RÉPONSE:
             french_word_count = sum(1 for word in words if word in french_markers)
             return french_word_count >= min(3, len(words) // 5)  # At least 3 French words or 20% French
 
-    # Utility for normalizing and hashing queries for caching
     def _hash_query(self, query):
-        """Normalize query to enable caching"""
+        """Enhanced query normalization for effective caching"""
+        # More aggressive normalization
         normalized = re.sub(r'\s+', ' ', query.lower().strip())
-        # Remove punctuation for better matching
-        normalized = re.sub(r'[,.?!;:]', '', normalized)
+        normalized = re.sub(r'[,.?!;:«»\'\"\(\)]', '', normalized)
+
+        # Remove common French stop words
+        for word in ['le', 'la', 'les', 'de', 'du', 'des', 'un', 'une', 'et', 'est', 'pour', 'dans', 'sur']:
+            normalized = re.sub(r'\b' + word + r'\b', '', normalized)
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+        # Check for high similarity with existing cached queries
+        for cached_query in self.recent_queries_cache:
+            similarity = self._calculate_similarity(normalized, cached_query)
+            if similarity > 0.85:  # High similarity threshold
+                logger.info(f"Cache hit: Found similar query with similarity {similarity:.2f}")
+                return cached_query
+
         return normalized
 
-    # Function to prioritize chunks by relevance
     def _prioritize_chunks(self, chunks, query):
         """Score chunks by relevance, article presence, and information density"""
-        query_lower = query.lower()
-        scored_chunks = []
+        # Extract keywords from query
+        query_keywords = self._extract_keywords(query)
 
+        scored_chunks = []
         for chunk in chunks:
             # Base score (assume it's stored in the chunk or use 1.0 as default)
             base_score = getattr(chunk, 'similarity_score', 1.0)
 
-            # Boost for chunks containing articles
+            # Check for article references (higher priority)
             article_match = re.search(r'Art\.\s+(\d+)', chunk.content)
+            article_boost = 1.0
             if article_match:
                 article_num = article_match.group(1)
-                # Extra boost if the article is mentioned in the query
-                if f"article {article_num}" in query_lower or f"art. {article_num}" in query_lower:
-                    base_score *= 1.5
-                else:
-                    base_score *= 1.2  # Regular boost for containing an article
+                article_boost = 1.3  # Regular boost for containing an article
 
-            # Boost information-dense chunks (more legal terms)
-            legal_term_count = sum(1 for term in LEGAL_TERMS if term in chunk.content.lower())
-            density_boost = 1 + (legal_term_count * 0.1)  # 10% boost per legal term
-            base_score *= density_boost
+                # Extra boost if the article number is explicitly mentioned in the query
+                if f"article {article_num}" in query.lower() or f"art. {article_num}" in query.lower():
+                    article_boost = 1.5  # Higher boost for relevant article
 
-            scored_chunks.append((chunk, base_score))
+            # Calculate keyword matching
+            keyword_matches = sum(1 for keyword in query_keywords if keyword in chunk.content.lower())
+            keyword_score = min(1.0, keyword_matches * 0.15)
 
-        # Return chunks sorted by score
-        return [c[0] for c in sorted(scored_chunks, key=lambda x: x[1], reverse=True)]
+            # Calculate information density
+            legal_term_count = sum(1 for term in LEGAL_TERMS if term.lower() in chunk.content.lower())
+            density_boost = 1.0 + (legal_term_count * 0.05)  # 5% boost per legal term
+
+            # Calculate semantic similarity if model available
+            semantic_score = 0.5  # Default medium score
+            if hasattr(self, 'semantic_model_available') and self.semantic_model_available:
+                semantic_score = self._semantic_similarity(query, chunk.content)
+
+            # Calculate final score with weights
+            final_score = (
+                    base_score * 0.2 +  # Original ranking (20%)
+                    article_boost * 0.3 +  # Article presence (30%)
+                    keyword_score * 0.2 +  # Keyword matching (20%)
+                    semantic_score * 0.2 +  # Semantic similarity (20%)
+                    density_boost * 0.1  # Information density (10%)
+            )
+
+            scored_chunks.append((chunk, final_score))
+
+        # Return chunks sorted by score (highest first)
+        sorted_chunks = sorted(scored_chunks, key=lambda x: x[1], reverse=True)
+        logger.info(f"Prioritized {len(chunks)} chunks, top score: {sorted_chunks[0][1]:.2f}")
+
+        return [chunk for chunk, _ in sorted_chunks]
 
     @lru_cache(maxsize=100)
     def _cached_find_relevant_chunks(self, query_hash, top_k=10):
@@ -456,9 +641,9 @@ INSTRUCTIONS DE RÉPONSE:
                 {"role": "system", "content": f"{system_instruction}\n\nContexte juridique:\n{context_text}"},
             ]
 
-            # Add conversation history (latest 2-3 messages only)
+            # Add conversation history
             if conversation_history:
-                for msg in conversation_history[-3:]:
+                for msg in conversation_history[-6:]:  # Use last 6 messages
                     messages.append(msg)
 
             # Add the current query
@@ -466,18 +651,19 @@ INSTRUCTIONS DE RÉPONSE:
 
             try:
                 # Use enhanced chat completion for more structured outputs
+                # Enhanced LLM parameters
                 response = self.llm.create_chat_completion(
                     messages=messages,
-                    max_tokens=2048,  # Doubled from 1024 for more complete answers
-                    temperature=0.5,  # Reduced from 0.7 for more coherent outputs
-                    top_p=0.92,  # Slightly increased for better vocabulary
-                    top_k=50,  # Increased from 40 for richer language
-                    repeat_penalty=1.15,  # Increased to reduce repetition
-                    presence_penalty=0.2,  # New parameter for topic diversity
-                    frequency_penalty=0.2,  # New parameter to reduce word repetition
+                    max_tokens=2048,  # Increased token limit
+                    temperature=0.3,  # Reduced from 0.5 for more precise legal answers
+                    top_p=0.85,  # More focused token sampling
+                    top_k=40,  # Slightly reduced for more precise responses
+                    repeat_penalty=1.2,  # Increased to reduce repetition
+                    presence_penalty=0.1,  # Reduced for more factual responses
+                    frequency_penalty=0.3,  # Increased to reduce word repetition
                     stop=["Utilisateur:", "User:", "Question:"],
-                    mirostat_mode=2,  # Enable mirostat sampling for higher quality
-                    mirostat_tau=5.0,  # Conservative value for coherence
+                    mirostat_mode=2,  # Enable adaptive sampling
+                    mirostat_tau=4.0,  # Adjusted for better coherence
                     mirostat_eta=0.1  # Learning rate for adaptive sampling
                 )
 
@@ -631,151 +817,101 @@ INSTRUCTIONS DE RÉPONSE:
                     "Comment puis-je vous aider sur ces sujets?")
 
     def process_message(self, conversation, query):
-        """
-        Process a user message and generate a response with enhanced conversational abilities
-        """
+        """Enhanced query processing with contextual awareness"""
         start_time = time.time()
         logger.info(f"Processing message: {query[:100]}...")
 
-        # Check if it's a purely conversational query first
+        # 1. Check if it's a conversational query first
         conversation_response, is_conversational = conversation_manager.handle_conversation(query, conversation)
-
-        # If it's conversational, skip the document search and LLM
         if is_conversational:
-            # Save the user message
-            user_message = Message.objects.create(
-                conversation=conversation,
-                role='user',
-                content=query
-            )
+            return self._handle_conversational_response(conversation, query, conversation_response)
 
-            # Save the assistant's response (with no relevant chunks)
-            assistant_message = Message.objects.create(
-                conversation=conversation,
-                role='assistant',
-                content=conversation_response
-            )
+        # 2. Query preprocessing and normalization
+        normalized_query = re.sub(r'\s+', ' ', query.strip())
 
-            # Update conversation title if it's a new conversation
-            if conversation.title == "New Conversation" and user_message.id <= 2:
-                new_title = query[:50] + "..." if len(query) > 50 else query
-                conversation.title = new_title
-                conversation.save()
-
-            logger.info(f"Processed conversational message in {time.time() - start_time:.2f}s")
-            return {
-                "message_id": assistant_message.id,
-                "content": conversation_response,
-                "relevant_documents": []
-            }
-
-        # Check cache for similar recent queries
-        query_hash = self._hash_query(query)
+        # 3. Enhanced caching with semantic similarity
+        query_hash = self._hash_query(normalized_query)
         if query_hash in self.recent_queries_cache:
             cached_result = self.recent_queries_cache[query_hash]
-            logger.info(f"Using cached result for similar query")
+            logger.info(f"Using cached result for similar query (saved {time.time() - start_time:.2f}s)")
+            return self._handle_cached_response(conversation, query, cached_result)
 
-            # Still save messages to database for conversation history
-            user_message = Message.objects.create(
-                conversation=conversation,
-                role='user',
-                content=query
-            )
+        # 4. Advanced retrieval pipeline
+        # 4.1 Get initial candidate chunks
+        relevant_chunks = find_relevant_chunks(query, top_k=12)  # Get more candidates
 
-            # Add relevant chunks from cache
-            user_message.relevant_document_chunks.set(cached_result['chunks'])
+        # 4.2 Extract legal concepts
+        legal_concepts = get_relevant_articles(query)
 
-            # Create assistant message with cached response
-            assistant_message = Message.objects.create(
-                conversation=conversation,
-                role='assistant',
-                content=cached_result['response']
-            )
+        # 4.3 Retrieve additional context-specific chunks if needed
+        if legal_concepts and len(relevant_chunks) < 3:
+            context_chunks = []
+            for article in legal_concepts:
+                article_chunks = DocumentChunk.objects.filter(content__contains=f"Art. {article}")
+                if article_chunks.exists():
+                    context_chunks.extend(list(article_chunks[:2]))  # Add up to 2 chunks per article
 
-            # Add the relevant chunks to the assistant message as well
-            assistant_message.relevant_document_chunks.set(cached_result['chunks'])
+            # Add these chunks if they're not already in relevant_chunks
+            for chunk in context_chunks:
+                if chunk not in relevant_chunks:
+                    relevant_chunks = list(relevant_chunks) + [chunk]
 
-            # Update conversation title if needed
-            if conversation.title == "New Conversation" and len(conversation.messages.all()) <= 2:
-                new_title = query[:50] + "..." if len(query) > 50 else query
-                conversation.title = new_title
-                conversation.save()
-
-            return {
-                "message_id": assistant_message.id,
-                "content": cached_result['response'],
-                "relevant_documents": [
-                    {
-                        "title": chunk.document.title,
-                        "excerpt": chunk.content[:100] + "..." if len(chunk.content) > 100 else chunk.content
-                    }
-                    for chunk in cached_result['chunks']
-                ],
-                "cached": True
-            }
-
-        # For non-conversational queries, proceed with document search
-        # Find relevant document chunks - get more chunks with optimized search
-        relevant_chunks = find_relevant_chunks(query, top_k=10)
-
-        # Prioritize chunks by relevance
+        # 4.4 Re-rank all chunks with improved scoring
         relevant_chunks = self._prioritize_chunks(relevant_chunks, query)
 
-        # Save the user message
+        # 5. Save user message
         user_message = Message.objects.create(
             conversation=conversation,
             role='user',
             content=query
         )
-
-        # Add the relevant chunks to the message
         user_message.relevant_document_chunks.set(relevant_chunks)
 
-        # Get conversation history
+        # 6. Process conversation history with improved context
         conversation_history = self._get_conversation_history(conversation)
-
-        # Check if this is the first interaction in this conversation
         is_first_interaction = len(conversation_history) <= 1
 
-        # Generate the response
+        # 7. Generate response with optimized LLM
         response_text = self._generate_response_with_local_llm(
             query, relevant_chunks, conversation_history
         )
 
-        # Enhance the response with conversational elements
+        # 8. Enhance response with conversational elements
         enhanced_response = conversation_manager.enhance_response(response_text, query, is_first_interaction)
 
-        # Save the assistant's response
+        # 9. Save assistant message
         assistant_message = Message.objects.create(
             conversation=conversation,
             role='assistant',
             content=enhanced_response
         )
-
-        # Add the relevant chunks to the assistant message as well
         assistant_message.relevant_document_chunks.set(relevant_chunks)
 
-        # Update the conversation title if it's a new conversation
+        # 10. Update conversation title if new
         if conversation.title == "New Conversation" and len(conversation_history) <= 2:
-            # Generate a title based on the first query (truncate if too long)
             new_title = query[:50] + "..." if len(query) > 50 else query
             conversation.title = new_title
             conversation.save()
 
-        # Cache this result for similar future queries
-        # Limit cache size by removing oldest entries if needed
-        if len(self.recent_queries_cache) > 100:
-            # Remove oldest entry
-            oldest_key = next(iter(self.recent_queries_cache))
-            del self.recent_queries_cache[oldest_key]
-
-        # Add to cache
+        # 11. Update cache
         self.recent_queries_cache[query_hash] = {
             'response': enhanced_response,
             'chunks': relevant_chunks,
             'timestamp': time.time()
         }
+
+        # 12. Prune cache if needed
+        if len(self.recent_queries_cache) > 100:
+            # Remove oldest entries
+            cache_items = list(self.recent_queries_cache.items())
+            sorted_by_time = sorted(cache_items, key=lambda x: x[1]['timestamp'])
+            for i in range(10):  # Remove oldest 10 entries
+                if i < len(sorted_by_time):
+                    del self.recent_queries_cache[sorted_by_time[i][0]]
+
         logger.info(f"Processed message in {time.time() - start_time:.2f}s")
+
+        # 13. Return formatted response
         return {
             "message_id": assistant_message.id,
             "content": enhanced_response,
@@ -786,6 +922,76 @@ INSTRUCTIONS DE RÉPONSE:
                 }
                 for chunk in relevant_chunks[:5]  # Limit to top 5 for response
             ]
+        }
+
+    def _handle_conversational_response(self, conversation, query, conversation_response):
+        """Handle purely conversational messages"""
+        # Save the user message
+        user_message = Message.objects.create(
+            conversation=conversation,
+            role='user',
+            content=query
+        )
+
+        # Save the assistant's response
+        assistant_message = Message.objects.create(
+            conversation=conversation,
+            role='assistant',
+            content=conversation_response
+        )
+
+        # Update conversation title if needed
+        if conversation.title == "New Conversation" and user_message.id <= 2:
+            new_title = query[:50] + "..." if len(query) > 50 else query
+            conversation.title = new_title
+            conversation.save()
+
+        logger.info(f"Processed conversational message")
+        return {
+            "message_id": assistant_message.id,
+            "content": conversation_response,
+            "relevant_documents": []
+        }
+
+    def _handle_cached_response(self, conversation, query, cached_result):
+        """Handle responses from cache"""
+        # Save the user message
+        user_message = Message.objects.create(
+            conversation=conversation,
+            role='user',
+            content=query
+        )
+
+        # Add relevant chunks from cache
+        user_message.relevant_document_chunks.set(cached_result['chunks'])
+
+        # Create assistant message with cached response
+        assistant_message = Message.objects.create(
+            conversation=conversation,
+            role='assistant',
+            content=cached_result['response']
+        )
+
+        # Add the relevant chunks to the assistant message as well
+        assistant_message.relevant_document_chunks.set(cached_result['chunks'])
+
+        # Update conversation title if needed
+        if conversation.title == "New Conversation" and len(conversation.messages.all()) <= 2:
+            new_title = query[:50] + "..." if len(query) > 50 else query
+            conversation.title = new_title
+            conversation.save()
+
+        return {
+            "message_id": assistant_message.id,
+            "content": cached_result['response'],
+            "relevant_documents": [
+                {
+                    "title": chunk.document.title,
+                    "excerpt": chunk.content[:100] + "..." if len(chunk.content) > 100 else chunk.content
+                }
+                for chunk in cached_result['chunks'][:5]  # Limit to top 5 for response
+            ],
+            "cached": True
         }
 
     def cleanup_resources(self):
@@ -799,3 +1005,6 @@ INSTRUCTIONS DE RÉPONSE:
             self.llm = None
             self.model_loaded = False
             self.llm_available = False
+
+        # Clear cache
+        self.recent_queries_cache.clear()
